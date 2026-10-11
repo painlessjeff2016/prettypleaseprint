@@ -1,27 +1,27 @@
 import { NextResponse } from "next/server";
-import { GetObjectCommand } from "@aws-sdk/client-s3";
 
 import { db } from "@/lib/db";
 import { currentUser, storyRef } from "@/lib/authz";
 import { storyScope, type Actor } from "@/lib/scope";
 import { record } from "@/lib/audit";
 import { readSlicerToken } from "@/lib/slicer-token";
-import { s3, bucket } from "@/lib/storage";
+import { Readable } from "node:stream";
+
+import { openModel } from "@/lib/storage";
 
 /**
  * The bytes of one model, for the viewer.
  *
- * Streamed through the app rather than handed out as a signed URL straight to
- * object storage. That is not the more elegant option, it is the only correct
- * one for this deployment: docker-compose.truenas.yml publishes no port for
- * MinIO, so a browser cannot reach it at all — a signed URL would resolve to
- * nothing. Proxying also keeps `connect-src 'self'` intact, which means the
- * viewer needs no CSP relaxation.
+ * Streamed through the app from `MODELS_ROOT`. There is nothing else it could
+ * do — the files are not in the web root and there is no storage service to
+ * hand out a URL for — and it keeps `connect-src 'self'` intact, which means
+ * the viewer needs no CSP relaxation.
  *
  * The trade is real: every viewer load moves the whole file through Next. At
- * 50 MB and a handful of people that is fine. If this ever faces a wider
- * audience, expose storage behind the same reverse proxy, hand out
- * `signedModelUrl`, and widen `connect-src` to that origin.
+ * 250 MB and a handful of people that is fine. If this ever faces a wider
+ * audience, serve the uploads directory from the reverse proxy and widen
+ * `connect-src` to that origin — carrying the `storyScope` check below with
+ * it, because that check is what makes a model private.
  *
  * Scoped with `storyScope`, the same fragment the story page composes, so a
  * client asking for someone else's model gets 404 — not 403, which would
@@ -98,16 +98,23 @@ export async function GET(
     return new NextResponse(null, { status: 404 });
   }
 
-  let object;
+  let file;
   try {
-    object = await s3.send(
-      new GetObjectCommand({ Bucket: bucket, Key: story.storageKey }),
-    );
+    file = await openModel(story.storageKey);
   } catch (error) {
     console.error("[models] storage read failed", error);
     return new NextResponse(null, { status: 502 });
   }
-  if (!object.Body) return new NextResponse(null, { status: 502 });
+  /*
+   * 502 rather than 404, deliberately. The row exists and the caller is
+   * allowed to see it — the file it names is missing, which is this side's
+   * problem and not a ticket that went away. Telling them 404 would send
+   * somebody looking for a deleted request instead of a broken volume.
+   */
+  if (!file) {
+    console.error("[models] row names a file that is not on disk", story.storageKey);
+    return new NextResponse(null, { status: 502 });
+  }
 
   // Worth a record when the bytes go to someone other than the person who
   // uploaded them — that is the printer owner taking a copy. The uploader
@@ -122,11 +129,12 @@ export async function GET(
     });
   }
 
-  return new NextResponse(object.Body.transformToWebStream(), {
+  return new NextResponse(Readable.toWeb(file.stream) as ReadableStream<Uint8Array>, {
     status: 200,
     headers: {
       "content-type": story.mimeType || "application/octet-stream",
-      ...(object.ContentLength ? { "content-length": String(object.ContentLength) } : {}),
+      // Always known now, where S3 only sometimes reported it.
+      "content-length": String(file.size),
       // Never let a browser decide to render a model file as something else.
       "content-disposition": `attachment; filename="${story.filename.replace(/"/g, "")}"`,
       "cache-control": "private, no-store",

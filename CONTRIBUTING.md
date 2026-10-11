@@ -5,24 +5,28 @@ maintainer — so the bar is not "be an expert", it is "leave it working".
 
 ## The contract
 
-Eight verification suites, all of which run in CI **against the built container
-image** rather than a dev server. They are the specification; if a change makes
-one fail, that is the change talking.
+Eleven verification suites. Ten of them run in CI **against the built container
+image** rather than a dev server; `verify:models` is a pure-function test of the
+upload validator and runs in its own gate with nothing else up. They are the
+specification; if a change makes one fail, that is the change talking.
 
 ```bash
 npm run verify:models     # upload validator vs. hostile fixtures — needs nothing running
 npm run verify:auth       # registration, sign-in, password reset
 npm run verify:upload     # upload → board → story
+npm run verify:import     # a model from a link, against a stand-in for the site
 npm run verify:queue      # admin queue, status flow, conversation, access
 npm run verify:frr        # the feature-request track: file, triage, the flow
 npm run verify:benefits   # the owner-managed benefits (tip) catalogue
+npm run verify:catalog    # the owner-managed material and colour catalogue
 npm run verify:api        # the JSON API, the OpenAPI document, the console
 npm run verify:passkey    # WebAuthn ceremonies in a real browser
 npm run probe:security    # OWASP-mapped probes
 ```
 
 Plus the cheap gates: `npm run typecheck`, `npm run check:secrets -- --all`,
-`npm run check:links`.
+`npm run check:links`. `scripts/full-test.sh` runs all of it the way CI does —
+gates, a fresh stack, every suite — and puts your env files back afterwards.
 
 [docs/development.md](docs/development.md) gets you set up.
 

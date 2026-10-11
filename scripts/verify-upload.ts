@@ -5,36 +5,34 @@
  *   npm run verify:upload
  *
  * Drives the real HTTP surface with real sessions and real files, and checks
- * what landed in Postgres and in object storage afterwards.
+ * what landed in Postgres and on disk afterwards.
  *
  * DESTRUCTIVE: wipes users, stories and invites. Development database only.
  */
 import "./_env";
-import { GetObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { stat } from "node:fs/promises";
+import { join, resolve } from "node:path";
 
 import { db } from "../src/lib/db";
 import { ensureCredentials, signInWithPassword, usernameFor } from "./_accounts";
 
 /**
- * A client of its own rather than the app's.
+ * The storage directory, read directly rather than through the app.
  *
- * `src/lib/storage.ts` is marked `server-only` because it holds credentials,
- * and that guard is worth keeping intact. Reading the bucket from outside is
- * also the more honest check: it confirms the object is really there rather
- * than trusting the module that put it there.
+ * `src/lib/storage.ts` is `server-only`, and that guard is worth keeping
+ * intact. Looking at the files from outside is also the more honest check: it
+ * confirms the bytes are really on disk rather than trusting the module that
+ * claims to have put them there. That property is why these assertions
+ * survived the move off object storage instead of being dropped — they are the
+ * ones that would notice if `putModel` or `copyModel` quietly stopped writing.
+ *
+ * `npm run env:container` points this at the host side of the container's
+ * /uploads mount.
  */
-const s3 = new S3Client({
-  endpoint: process.env.S3_ENDPOINT ?? "http://localhost:9000",
-  region: process.env.S3_REGION ?? "us-east-1",
-  forcePathStyle: true,
-  credentials: {
-    accessKeyId: process.env.S3_ACCESS_KEY ?? "ppp",
-    secretAccessKey: process.env.S3_SECRET_KEY ?? "dev-only-not-a-secret",
-  },
-});
+const MODELS_ROOT = resolve(process.env.MODELS_ROOT ?? "./data/uploads");
+const pathForKey = (key: string) => join(MODELS_ROOT, key);
 
 const APP = process.env.BETTER_AUTH_URL ?? "http://localhost:3000";
-const BUCKET = process.env.S3_BUCKET ?? "ppp-models";
 
 let passed = 0;
 const failures: string[] = [];
@@ -158,6 +156,8 @@ function upload(b: Browser, filename: string, bytes: Uint8Array, fields: Record<
   form.set("tip", fields.tip ?? "A beer");
   form.set("note", fields.note ?? "No rush.");
   form.set("printSettings", fields.printSettings ?? "");
+  // Only when asked for: a client written before priority existed sends none.
+  if (fields.priority !== undefined) form.set("priority", fields.priority);
   return b.raw(`${APP}/api/upload`, { method: "POST", body: form });
 }
 
@@ -165,23 +165,6 @@ const rendered = (html: string) => html.replace(/<!--\s*-->/g, "");
 const unescapeHtml = (s: string) =>
   s.replace(/&quot;/g, '"').replace(/&#x27;|&#39;/g, "'")
     .replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
-
-/** Replay the server-action form whose markup contains `marker`, JS-off style. */
-async function submitForm(
-  b: Browser, url: string, html: string, marker: string, values: Record<string, string>,
-) {
-  const form = (html.match(/<form\b[\s\S]*?<\/form>/g) ?? []).find((f) => f.includes(marker));
-  if (!form) throw new Error(`no form matching ${JSON.stringify(marker)} on ${url}`);
-  const body = new FormData();
-  for (const tag of form.match(/<input\b[^>]*>/g) ?? []) {
-    if (!tag.includes('type="hidden"')) continue;
-    const n = /name="([^"]*)"/.exec(tag)?.[1];
-    const v = /value="([^"]*)"/.exec(tag)?.[1] ?? "";
-    if (n) body.append(unescapeHtml(n), unescapeHtml(v));
-  }
-  for (const [k, v] of Object.entries(values)) body.set(k, v);
-  return b.raw(url, { method: "POST", body });
-}
 
 async function main() {
   section("setup");
@@ -229,6 +212,9 @@ async function main() {
         story?.colorName === "Slate" && story?.colorHex === "#4a5d78",
         JSON.stringify({ m: story?.material, q: story?.quantity, c: story?.colorName }));
 
+  check("with no priority sent it is medium — older clients keep working",
+        story?.priority === "medium", `${story?.priority}`);
+
   check("the storage key is generated, not derived from the filename",
         !!story && !story.storageKey.includes("monitor-hook") &&
         /^models\/\d{4}-\d{2}\/[0-9a-f-]{36}\.stl$/.test(story.storageKey),
@@ -236,13 +222,13 @@ async function main() {
 
   let storedBytes = 0;
   try {
-    const obj = await s3.send(new GetObjectCommand({ Bucket: BUCKET, Key: story!.storageKey }));
-    storedBytes = (await obj.Body!.transformToByteArray()).length;
-  } catch (e) {
+    storedBytes = (await stat(pathForKey(story!.storageKey))).size;
+  } catch {
     storedBytes = -1;
   }
-  check("the bytes really landed in object storage",
-        storedBytes === story?.fileSize, `stored ${storedBytes}, expected ${story?.fileSize}`);
+  check("the bytes really landed on disk",
+        storedBytes === story?.fileSize,
+        `stored ${storedBytes}, expected ${story?.fileSize}, at ${pathForKey(story?.storageKey ?? "")}`);
 
   check("the admin was notified",
         (await db.notification.count({ where: { recipientId: admin.id, storyId: story!.id } })) === 1);
@@ -464,14 +450,36 @@ async function main() {
   // `story` is Ayla's real upload from the top of this run — a genuine object
   // in the bucket, which is exactly what re-queue has to copy.
   const beforeKey = (await db.story.findUnique({ where: { id: story!.id } }))!.storageKey;
+  const countBeforeAgain = await db.story.count();
   const rqPage = rendered(await (await aylaB.go(`${APP}/story/${story!.id}`)).text());
-  check("the story page offers Print again", rqPage.includes("no re-upload"));
-  const posted = await submitForm(aylaB, `${APP}/story/${story!.id}`, rqPage, "no re-upload", {
-    storyId: String(story!.id), from: `/story/${story!.id}`,
-  });
-  const newId = Number((posted.headers.get("location") ?? "").match(/\/story\/(\d+)/)?.[1]);
-  check("re-queue redirects to a new ticket",
-        Number.isInteger(newId) && newId !== story!.id, posted.headers.get("location") ?? "");
+  check("the story page offers Print again",
+        rqPage.includes("no re-upload") && rqPage.includes(`/story/${story!.id}/again`));
+
+  // The control leads to the request form, filled in — not straight to a copy.
+  const againPage = await aylaB.go(`${APP}/story/${story!.id}/again`);
+  const againHtml = rendered(await againPage.text());
+  check("it opens the request form rather than cloning on a click",
+        againPage.status === 200 && (await db.story.count()) === countBeforeAgain,
+        `status ${againPage.status}`);
+  check("the form names the file and has no dropzone",
+        againHtml.includes(story!.filename) && !againHtml.includes('type="file"'));
+  check("and starts from the old wish", againHtml.includes(`value="${story!.title}"`));
+  check("somebody else's ticket has no such page",
+        (await jonasB.go(`${APP}/story/${story!.id}/again`)).status === 404);
+  check("nor does the owner's view of a ticket they did not ask for",
+        (await rubenB.go(`${APP}/story/${story!.id}/again`)).status === 404);
+
+  const requeue = (b: Browser, id: number, body: unknown) =>
+    b.raw(`${APP}/api/stories/${id}/requeue`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+
+  const posted = await requeue(aylaB, story!.id, {});
+  const newId = Number(((await posted.json()) as { story?: { id?: number } }).story?.id);
+  check("sending it unchanged opens a new ticket",
+        posted.status === 201 && Number.isInteger(newId) && newId !== story!.id, `status ${posted.status}`);
 
   const copy = await db.story.findUnique({ where: { id: newId } });
   check("the copy is a fresh Requested ticket, owned by the requester",
@@ -489,18 +497,18 @@ async function main() {
   check("re-queue was audited",
         (await db.auditEvent.count({ where: { action: "story.requeued", actorId: ayla.id } })) === 1);
 
-  const objExists = async (key: string) => {
-    try { await s3.send(new GetObjectCommand({ Bucket: BUCKET, Key: key })); return true; }
+  const fileExists = async (key: string) => {
+    try { return (await stat(pathForKey(key))).isFile(); }
     catch { return false; }
   };
-  check("the copied object really landed in storage", await objExists(copy!.storageKey));
+  check("the copied file really landed on disk", await fileExists(copy!.storageKey));
   // Withdraw the copy (through the DELETE route it delegates to) and confirm
   // the original's file survives — proof the copy is genuinely independent.
   const del = await aylaB.raw(`${APP}/api/stories/${newId}`, { method: "DELETE" });
   check("the copy can be withdrawn",
         del.status === 200 && (await db.story.count({ where: { id: newId } })) === 0,
         `status ${del.status}`);
-  check("and the original's file is still in storage afterwards", await objExists(beforeKey));
+  check("and the original's file is still in storage afterwards", await fileExists(beforeKey));
 
   section("print settings ride on the request (FRR-103)");
 
@@ -516,13 +524,75 @@ async function main() {
   check("the owner sees the print settings on the ticket",
         ownerView.includes("Print settings") && ownerView.includes("gyroid infill"));
 
-  const rqPage2 = rendered(await (await aylaB.go(`${APP}/story/${psStory!.id}`)).text());
-  const posted2 = await submitForm(aylaB, `${APP}/story/${psStory!.id}`, rqPage2, "no re-upload", {
-    storyId: String(psStory!.id), from: `/story/${psStory!.id}`,
-  });
-  const newId2 = Number((posted2.headers.get("location") ?? "").match(/\/story\/(\d+)/)?.[1]);
+  const posted2 = await requeue(aylaB, psStory!.id, {});
+  const newId2 = Number(((await posted2.json()) as { story?: { id?: number } }).story?.id);
   const copy2 = await db.story.findUnique({ where: { id: newId2 } });
   check("re-queue carries the print settings onto the copy", copy2?.printSettings === SETTINGS, copy2?.printSettings);
+
+  section("priority rides on the request");
+  const rushUp = await upload(aylaB, "rush.stl", binaryStl(12, 12, 12), { title: "Rush part", priority: "high" });
+  const rushRow = await db.story.findFirst({ where: { title: "Rush part" } });
+  check("an upload can say how much it matters", rushUp.status < 300 && rushRow?.priority === "high",
+        `status ${rushUp.status} ${rushRow?.priority}`);
+  const sillyUp = await upload(aylaB, "silly.stl", binaryStl(12, 12, 12), { title: "Silly part", priority: "URGENT!!" });
+  check("a priority that is not one is refused, and files nothing",
+        sillyUp.status === 400 && (await db.story.count({ where: { title: "Silly part" } })) === 0,
+        `status ${sillyUp.status}`);
+  const rushForm = rendered(await (await aylaB.go(`${APP}/upload`)).text());
+  check("the request form asks", rushForm.includes("How much does it matter?"));
+
+  section("printing again with the settings tuned");
+
+  const TUNED = "0.12mm layers, 60% infill — the first one snapped";
+  const tuned = await requeue(aylaB, psStory!.id, {
+    quantity: 3, material: "PLA", colorName: "Teal", printSettings: TUNED,
+  });
+  const tunedId = Number(((await tuned.json()) as { story?: { id?: number } }).story?.id);
+  const tunedCopy = await db.story.findUnique({ where: { id: tunedId } });
+  check("what was changed is on the new ticket",
+        tuned.status === 201 && tunedCopy?.quantity === 3 && tunedCopy?.material === "PLA" &&
+        tunedCopy?.colorName === "Teal" && tunedCopy?.printSettings === TUNED,
+        JSON.stringify({ s: tuned.status, q: tunedCopy?.quantity, m: tunedCopy?.material, c: tunedCopy?.colorName }));
+  check("the colour follows the new choice, not the old ticket", tunedCopy?.colorHex === "#12645f", tunedCopy?.colorHex);
+  check("what was left alone is carried over",
+        tunedCopy?.title === psStory!.title && tunedCopy?.tip === psStory!.tip &&
+        tunedCopy?.filename === psStory!.filename && tunedCopy?.dims === psStory!.dims);
+  const rushAgain = await requeue(aylaB, rushRow!.id, {});
+  const rushCopy = await db.story.findUnique({
+    where: { id: Number(((await rushAgain.json()) as { story?: { id?: number } }).story?.id) },
+  });
+  check("printing again keeps the priority unless it is changed", rushCopy?.priority === "high", `${rushCopy?.priority}`);
+  const calmer = await requeue(aylaB, rushRow!.id, { priority: "low" });
+  const calmCopy = await db.story.findUnique({
+    where: { id: Number(((await calmer.json()) as { story?: { id?: number } }).story?.id) },
+  });
+  check("and takes a new one when it is", calmCopy?.priority === "low", `${calmCopy?.priority}`);
+
+  const stillOld = await db.story.findUnique({ where: { id: psStory!.id } });
+  check("the old ticket is exactly as it was",
+        stillOld?.quantity === psStory!.quantity && stillOld?.material === psStory!.material &&
+        stillOld?.printSettings === SETTINGS);
+  const tunedAudit = await db.auditEvent.findFirst({
+    where: { action: "story.requeued", subject: `PPP-${100 + tunedId}` },
+  });
+  const changedFields = ((tunedAudit?.detail ?? {}) as { changed?: string[] }).changed ?? [];
+  check("the trail says which fields changed, not what they said",
+        ["quantity", "material", "colorName", "printSettings"].every((f) => changedFields.includes(f)) &&
+        !JSON.stringify(tunedAudit?.detail).includes("snapped"),
+        JSON.stringify(tunedAudit?.detail));
+
+  const countBeforeBad = await db.story.count();
+  const offShelf = await requeue(aylaB, psStory!.id, { material: "PETG", colorName: "Unobtainium" });
+  check("a colour that is not on the shelf is refused", offShelf.status === 409, `status ${offShelf.status}`);
+  const tooMany = await requeue(aylaB, psStory!.id, { quantity: 9999 });
+  check("a changed field is held to the upload's rules", tooMany.status === 400, `status ${tooMany.status}`);
+  const badTip = await requeue(aylaB, psStory!.id, { tip: "A yacht" });
+  check("a benefit that is not on offer is refused", badTip.status === 409, `status ${badTip.status}`);
+  check("and none of those opened a ticket", (await db.story.count()) === countBeforeBad);
+  const notYours = await requeue(jonasB, psStory!.id, { quantity: 2 });
+  check("somebody else's ticket cannot be re-queued", notYours.status === 404, `status ${notYours.status}`);
+  const ownerTry = await requeue(rubenB, psStory!.id, { quantity: 2 });
+  check("not even by the owner, who can see it", ownerTry.status === 403, `status ${ownerTry.status}`);
 
   const noPS = await upload(aylaB, "plain.stl", binaryStl(15, 15, 15), { title: "No settings here" });
   check("an upload with no print settings still works", noPS.status < 300, `status ${noPS.status}`);

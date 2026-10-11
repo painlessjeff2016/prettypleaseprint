@@ -103,11 +103,14 @@ model Account {
   id        String @id @default(cuid())
   accountId String
 
-  /// Namespace for `accountId`, so a provider id can never collide with an
-  /// internal method. Better Auth writes `local:credential` for a password
-  /// account; an OAuth provider would get its own issuer. Required by the
-  /// library, and the left half of the uniqueness rule below.
-  issuer     String
+  /// Dead, and kept on purpose. Better Auth 1.7.0–1.7.2 required this column
+  /// and wrote `local:credential` into it; 1.7.3 stopped writing it and went
+  /// back to recognising an account by `providerId` and `accountId`, so a
+  /// required column here made every insert fail. It is nullable rather than
+  /// dropped because the deploy wizard rolls back to the previous image when a
+  /// deploy fails its health check, and that image's client still selects it —
+  /// drop it once no deployment can roll back past this point.
+  issuer     String?
   providerId String
   userId                String
   user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -123,7 +126,7 @@ model Account {
   createdAt             DateTime  @default(now())
   updatedAt             DateTime  @updatedAt
 
-  @@unique([issuer, accountId])
+  @@unique([providerId, accountId])
   @@index([userId])
   @@map("account")
 }
@@ -251,11 +254,30 @@ enum StoryStatus {
   Declined
 }
 
+/// Unused, and kept on purpose. `Story.material` was this enum until materials
+/// became owner-managed text. The previous image's client still casts every
+/// insert to it, and the deploy wizard rolls back to that image when a deploy
+/// fails its health check — with the type gone, nobody could file a request
+/// after a rollback. Drop it once no deployment can roll back past this point.
 enum Material {
   PLA
   PETG
   TPU
   Resin
+}
+
+/// How much a print matters to the person asking. Same three steps as a
+/// feature request's, in its own type — see the story_priority migration.
+enum StoryPriority {
+  low
+  medium
+  high
+}
+
+enum CatalogColorMode {
+  solid
+  gradient
+  whatever
 }
 
 model Story {
@@ -268,9 +290,21 @@ model Story {
   uploader   User   @relation(fields: [uploaderId], references: [id], onDelete: Cascade)
 
   quantity  Int      @default(1)
-  material  Material @default(PETG)
+  /// Set by the requester when filing and changeable while the ticket is still
+  /// on the rail, by them or by the owner. It orders the owner's queue; it
+  /// promises nothing about when the printer is free.
+  priority  StoryPriority @default(medium)
+  /// Snapshots the catalog label at submission time. Catalog entries may be
+  /// renamed or disabled later without rewriting an old order.
+  material  String   @default("PETG")
   colorName String
   colorHex  String
+  /// CSS swatch snapshot. Gradients render here while colorHex remains the
+  /// representative solid used by the 3D viewer.
+  colorStyle String?
+  /// Snapshot of how the swatch behaves. Kept separate from the editable
+  /// label so renaming "Whatever's on" cannot change an old ticket.
+  colorMode  CatalogColorMode @default(solid)
   tip       String
   note      String   @default("")
 
@@ -283,11 +317,17 @@ model Story {
   flagged    Boolean @default(false)
   flagReason String?
 
-  // --- uploaded asset. Bytes live in object storage, never the web root. ---
+  // --- uploaded asset. Bytes live under MODELS_ROOT, never the web root. ---
   filename   String
   fileSize   Int
   mimeType   String
   storageKey String
+
+  /// Where the model came from, when it was imported from a link instead of
+  /// uploaded: the model's page on the site it was fetched from. Built by the
+  /// server from what that site's API returned, never copied from what the
+  /// requester typed — see src/lib/import.ts. Null for an upload.
+  sourceUrl String?
 
   // --- measured from the mesh at upload time, display only ---
   //
@@ -306,6 +346,43 @@ model Story {
   @@index([uploaderId])
   @@index([status])
   @@map("story")
+}
+
+/// A material the printer owner can currently offer. Disabling an entry only
+/// removes it from new requests; stories keep their material snapshot.
+model CatalogMaterial {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  active    Boolean  @default(true)
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  colors    CatalogColor[]
+
+  @@index([active, sortOrder])
+  @@map("catalogMaterial")
+}
+
+/// A spool colour belongs to one material: the upload form changes its colour
+/// choices as soon as the requester picks a different material.
+model CatalogColor {
+  id         String          @id @default(cuid())
+  materialId String
+  material   CatalogMaterial @relation(fields: [materialId], references: [id], onDelete: Cascade)
+  name       String
+  hex        String
+  /// A CSS colour or linear-gradient used by swatches in the UI.
+  style      String
+  /// `solid`, `gradient`, or `whatever`; never inferred from the display name.
+  mode       CatalogColorMode @default(solid)
+  active     Boolean         @default(true)
+  sortOrder  Int             @default(0)
+  createdAt  DateTime        @default(now())
+  updatedAt  DateTime        @updatedAt
+
+  @@unique([materialId, name])
+  @@index([materialId, active, sortOrder])
+  @@map("catalogColor")
 }
 
 model Comment {

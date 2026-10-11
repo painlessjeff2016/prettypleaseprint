@@ -57,7 +57,7 @@ no header that names a user.
 | | | |
 | --- | --- | --- |
 | `GET` | `/api/health` | Can the app serve? The only endpoint with no session. |
-| `GET` | `/api/stories` | Your tickets. The printer owner's is everyone's. |
+| `GET` | `/api/stories` | Your tickets. The printer owner's is everyone's, and `?uploader=<id>,<id>` narrows it to particular people. |
 | `GET` | `/api/stories/{id}` | One ticket. |
 | `DELETE` | `/api/stories/{id}` | Withdraw your own request. |
 | `POST` | `/api/stories/{id}/advance` | Move it one step along. *Printer owner.* |
@@ -65,9 +65,14 @@ no header that names a user.
 | `POST` | `/api/stories/{id}/flag` | Flag a model problem, with a reason. *Printer owner.* |
 | `DELETE` | `/api/stories/{id}/flag` | Clear the flag. *Printer owner.* |
 | `GET` `POST` | `/api/stories/{id}/comments` | The conversation on a ticket. |
+| `POST` | `/api/stories/{id}/priority` | Set how much it matters: low, medium or high. Yours, or any as the printer owner. |
+| `POST` | `/api/stories/{id}/requeue` | Print your own ticket again from the same file, changing what you like. |
 | `GET` | `/api/notifications` | Your Activity feed. |
 | `POST` | `/api/notifications/read` | Mark one read, or all of them. |
+| `GET` | `/api/catalog` | The materials and colours on offer right now, and which sites — if any — this instance imports from. |
 | `POST` | `/api/upload` | Upload a model and open a request. Multipart. |
+| `POST` | `/api/import/files` | What a link to a model offers: the model and its printable files. `501` unless the instance imports. |
+| `POST` | `/api/import` | Open a request from one of those files instead of an upload. |
 | `GET` | `/api/models/{id}` | The model's bytes. |
 | `GET` | `/api/openapi.json` | This surface, machine-readable. |
 | | `/api/auth/*` | Every Better Auth endpoint — sign-in, passkeys, admin, reset. |
@@ -109,6 +114,12 @@ an STL renamed `.3mf` is refused. Nothing reaches storage until the file has
 been inspected and no ticket exists until the object is in place, so a rejected
 upload leaves nothing behind. The uploader comes from the session: an
 `uploaderId` or a `status` in the body is ignored.
+
+Material and colour values come from the owner's live catalogue, not a fixed
+API enum. `GET /api/catalog` lists the pairs on offer right now — the same read
+the request form makes — as `{ materials: [{ name, colors: [{ name, hex, style,
+mode }] }] }`. The server checks the pair again when the upload arrives, so a
+retired or removed choice is refused even if an older client still posts it.
 
 ```bash
 curl -s https://print.example/api/upload \
@@ -195,7 +206,7 @@ npx @openapitools/openapi-generator-cli generate -i openapi.json -g typescript-f
 
 ## What is not here
 
-- **No webhooks.** Nothing calls out. If you want to know when a ticket moves,
+- **No webhooks.** Nothing calls *you*. If you want to know when a ticket moves,
   poll `/api/notifications`.
 - **No bulk endpoints.** Five people and one printer; a loop is fine.
 - **No API keys, scopes or service accounts.** Every call is made *as* a

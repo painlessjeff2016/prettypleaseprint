@@ -53,7 +53,7 @@ services:
   #
   # On a first deploy it also prints a one-use link for the admin to set a
   # username and a password — that link is the whole bootstrap, so read the
-  # logs:  docker compose -f docker-compose.prod.yml logs migrate
+  # logs:  docker compose --env-file .env.docker -f docker-compose.prod.yml logs migrate
   migrate:
     image: ${PPP_REGISTRY:-ghcr.io/danileau}/ppp-migrate:${PPP_TAG:-latest}
     container_name: ppp-migrate
@@ -62,7 +62,13 @@ services:
       DATABASE_URL: postgresql://ppp:${DB_PASSWORD:?set DB_PASSWORD}@db:5432/ppp?schema=public
       # The set-password link it prints has to point at the hostname the
       # browser uses, not at the container's idea of localhost.
-      BETTER_AUTH_URL: ${APP_URL:-http://localhost:4000}
+      BETTER_AUTH_URL: ${APP_URL:-http://localhost:3000}
+    # Mounted so the migrator can create it and hand it to the app's uid. The
+    # app runs as 1001 and Docker creates a missing bind-mount source as root,
+    # so without this a fresh deployment starts with an unwritable store and
+    # the first upload fails — on a path nobody walks twice.
+    volumes:
+      - ${DATA_ROOT:-./data}/uploads:/uploads
     depends_on:
       db:
         condition: service_healthy
@@ -75,26 +81,29 @@ services:
     env_file: [.env.docker]
     environment:
       DATABASE_URL: postgresql://ppp:${DB_PASSWORD:?set DB_PASSWORD}@db:5432/ppp?schema=public
-      S3_ENDPOINT: http://minio:9000
+      # Model files, on a disk rather than behind an S3 API. `migrate` creates
+      # this directory and hands it to uid 1001 before the app ever starts —
+      # see its command below.
+      MODELS_ROOT: /uploads
       # Better Auth derives cookie scope, invitation and set-password link
       # URLs, and the WebAuthn relying party from this. It must match what the browser actually sees,
       # including scheme and port.
-      BETTER_AUTH_URL: ${APP_URL:-http://localhost:4000}
+      BETTER_AUTH_URL: ${APP_URL:-http://localhost:3000}
       # Forwarded client addresses are only believed when a proxy is genuinely
       # the only way in — see docker-compose.proxy.yml and src/lib/client-ip.ts.
       TRUST_PROXY_HEADERS: ${TRUST_PROXY_HEADERS:-false}
     # No ports are published here on purpose. A deployment puts a reverse proxy
     # in front (docker-compose.proxy.yml); local testing publishes them with
     # docker-compose.test.yml. Nothing is reachable by default.
+    volumes:
+      - ${DATA_ROOT:-./data}/uploads:/uploads
     depends_on:
       db:
-        condition: service_healthy
-      minio:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
     healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 30s
       timeout: 5s
       start_period: 20s
@@ -115,28 +124,6 @@ services:
       interval: 10s
       timeout: 5s
       retries: 10
-
-  # Model files. Never exposed to the internet — the app fetches from it
-  # server-side and hands out short-lived signed URLs.
-  minio:
-    image: quay.io/minio/minio:latest
-    container_name: ppp-minio
-    <<: *restart
-    command: server /data --console-address ":9001"
-    environment:
-      MINIO_ROOT_USER: ${S3_ACCESS_KEY:-ppp}
-      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:?set S3_SECRET_KEY}
-    volumes:
-      - ${DATA_ROOT:-./data}/models:/data
-    healthcheck:
-      test: ["CMD", "mc", "ready", "local"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-
-  # Development and staging only. Catches every outgoing email so invitation
-  # and password-reset links can be clicked without a real mail server.
-  # Enable with:  --profile mailcatcher
   mailpit:
     image: axllent/mailpit:latest
     container_name: ppp-mailpit

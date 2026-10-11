@@ -4,6 +4,7 @@ import { NextResponse } from "next/server";
 import { currentUser } from "@/lib/authz";
 import { storyRef, type Actor } from "@/lib/scope";
 import { StoryProblem, type CommentRow, type StoryRow } from "@/lib/stories";
+import { trustedSourceLink } from "@/lib/import-source";
 import type { Prisma } from "@prisma/client";
 
 /**
@@ -175,8 +176,15 @@ export function storyResource(story: StoryRow) {
     flagged: story.flagged,
     flagReason: story.flagReason,
     quantity: story.quantity,
+    priority: story.priority,
     material: story.material,
-    color: { name: story.colorName, hex: story.colorHex },
+    color: {
+      name: story.colorName,
+      hex: story.colorHex,
+      // Tickets filed before swatches had a style carry none; the hex is it.
+      style: story.colorStyle ?? story.colorHex,
+      mode: story.colorMode,
+    },
     tip: story.tip,
     note: story.note,
     file: {
@@ -186,6 +194,10 @@ export function storyResource(story: StoryRow) {
       dims: story.dims,
       url: `/api/models/${story.id}`,
     },
+    // Where the model was imported from, or null for an upload. Passed through
+    // `trustedSourceLink` rather than emitted raw: it is a link somebody will
+    // follow, so it leaves only if it is one this app could have written.
+    source: trustedSourceLink(story.sourceUrl)?.href ?? null,
     uploader: {
       id: story.uploader.id,
       name: story.uploader.name,

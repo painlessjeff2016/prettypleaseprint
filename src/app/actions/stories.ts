@@ -1,6 +1,7 @@
 "use server";
 
 import { redirect } from "next/navigation";
+import { safeRedirectPath } from "@/lib/safe-redirect";
 
 import { requireAdmin, requireUser } from "@/lib/authz";
 import {
@@ -9,7 +10,7 @@ import {
   clearFlag as clear,
   declineStory as decline,
   flagStory as flag,
-  requeueStory as requeue,
+  changeStoryPriority as reprioritise,
   storyIdOr400,
   withdrawStory as withdraw,
 } from "@/lib/stories";
@@ -41,8 +42,7 @@ import {
  * a phishing page borrows your domain's credibility.
  */
 function back(from: FormDataEntryValue | null, params: Record<string, string>): never {
-  const raw = typeof from === "string" ? from : "";
-  const safe = raw.startsWith("/") && !raw.startsWith("//") ? raw.split("?")[0]! : "/queue";
+  const safe = safeRedirectPath(from, "/queue");
   const q = new URLSearchParams(params).toString();
   redirect(`${safe}?${q}`);
 }
@@ -124,15 +124,18 @@ export async function withdrawStory(formData: FormData): Promise<void> {
 }
 
 /**
- * Re-queue a past request as a fresh one (FRR-102). Lands on the NEW ticket,
- * which is what the requester wants to watch now — the old one is history.
+ * Change a ticket's priority. The requester's on their own ticket and the
+ * owner's on any — which is why this takes `requireUser`, like withdraw; who
+ * may is the service's decision. Lands back on the ticket.
  */
-export async function requeueStory(formData: FormData): Promise<void> {
+export async function changeStoryPriority(formData: FormData): Promise<void> {
   const user = await requireUser();
   const id = storyIdOr400(formData.get("storyId"));
   try {
-    const done = await requeue(user, id);
-    back(`/story/${done.id}`, { toast: `Re-queued ${done.fromRef} as ${done.ref}` });
+    const done = await reprioritise(user, id, formData.get("priority") ?? "");
+    back(`/story/${id}`, {
+      toast: done.unchanged ? `Already ${done.to} priority.` : `Priority → ${done.to}.`,
+    });
   } catch (error) {
     if (error instanceof StoryProblem) back(`/story/${id}`, { toast: error.message });
     throw error;

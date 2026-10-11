@@ -1,38 +1,19 @@
-/**
- * The fixed choices a request can be made from, exactly as the handoff lists
- * them. The form renders from these and the server validates against them, so
- * the two cannot drift apart.
- */
 import { z } from "zod";
 
-/** export const MATERIALS = ["PLA", "PETG", "TPU", "Resin"] as const; */
-/** export const DEFAULT_MATERIAL = "PETG"; */
-
-export const MATERIALS = ["PLA"] as const;
-export const DEFAULT_MATERIAL = "PLA";
-
-/** Filament swatches. Light ones need the inset ring to stay visible. */
-/** export const COLORS = [ */
-/**   { name: "Teal", hex: "#12645f" }, */
-/**   { name: "Slate", hex: "#4a5d78" }, */
-/**   { name: "Bone white", hex: "#eaecee" }, */
-/**   { name: "Graphite", hex: "#1b2126" }, */
-/**   { name: "Whatever's on", hex: "#b6bcc2" }, */
-/** ] as const; */
-/** export const DEFAULT_COLOR = COLORS[1]; // Slate */
-
-export const COLORS = [
-  { name: "Black", hex: "#000000" },
-  { name: "White", hex: "#FFFFFF" },
-  { name: "Gray", hex: "#8E9089" },
-  { name: "Red", hex: "#C12E1F" },
-  { name: "Blue", hex: "#0A2989" },
-  { name: "Gold", hex: "#F4A925" },
-  { name: "Yellow", hex: "#FEC600" },
-  { name: "Whatever's on", hex: "#b6bcc2" },
-] as const;
-
-export const DEFAULT_COLOR = COLORS[1]; // White
+export const COLOR_MODES = ["solid", "gradient", "whatever"] as const;
+export type ColorMode = (typeof COLOR_MODES)[number];
+export type CatalogColorChoice = {
+  id: string;
+  name: string;
+  hex: string;
+  style: string;
+  mode: ColorMode;
+};
+export type CatalogMaterialChoice = {
+  id: string;
+  name: string;
+  colors: CatalogColorChoice[];
+};
 
 /**
  * The default tips, seeded into the `Benefit` table on first run. The live
@@ -63,6 +44,17 @@ export const STATUS_CHIP: Record<
   Declined: { bg: "#e2e6ea", fg: "#6b747c" },
 };
 
+/**
+ * How much a print matters to the person asking. The same three steps a
+ * feature request uses (`FEATURE_PRIORITIES`, below) and drawn with the same
+ * `PRIORITY_CHIP`, but its own list: the two backlogs are parallel, not shared.
+ */
+export const STORY_PRIORITIES = ["low", "medium", "high"] as const;
+export type StoryPriorityName = (typeof STORY_PRIORITIES)[number];
+export const DEFAULT_STORY_PRIORITY: StoryPriorityName = "medium";
+
+/** Loudest first: the order the owner's queue reads in. */
+export const PRIORITY_RANK: Record<string, number> = { high: 0, medium: 1, low: 2 };
 
 export const QuantitySchema = z.coerce
   .number()
@@ -79,13 +71,15 @@ export const WishSchema = z.object({
     .max(120, "Keep the title under 120 characters.")
     .optional()
     .default(""),
-  material: z.enum(MATERIALS),
-  colorName: z
-  .string()
-  .trim()
-  .min(1, "Choose a filament.")
-  .max(120, "That filament name is too long."),
+  // Availability and the material/colour relationship are checked against
+  // the database in the upload route. These bounds keep hostile form values
+  // small before that query runs.
+  material: z.string().trim().min(1, "Pick a material.").max(40),
+  colorName: z.string().trim().min(1, "Pick a colour.").max(120),
   quantity: QuantitySchema,
+  // Optional on the wire, so a client written before priority existed still
+  // files a request — it comes out `medium`, which is what it would have meant.
+  priority: z.enum(STORY_PRIORITIES, "That is not a priority.").optional().default(DEFAULT_STORY_PRIORITY),
   // The tip is no longer a compile-time enum — it is an owner-managed list.
   // This module is shared with the client bundle and cannot read the database,
   // so it only checks the shape; the upload route validates the value against
@@ -103,10 +97,6 @@ export const WishSchema = z.object({
 });
 
 export type Wish = z.infer<typeof WishSchema>;
-
-export function hexForColor(name: string): string {
-  return COLORS.find((c) => c.name === name)?.hex ?? DEFAULT_COLOR.hex;
-}
 
 /** "4 prints" / "1 print" */
 export const quantityText = (n: number) => `${n} ${n === 1 ? "print" : "prints"}`;

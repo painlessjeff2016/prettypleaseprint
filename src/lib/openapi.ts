@@ -2,9 +2,10 @@ import "server-only";
 import { z } from "zod";
 
 import { auth } from "@/lib/auth";
-import { MATERIALS, TIPS, WishSchema } from "@/lib/catalog";
+import { COLOR_MODES, STORY_PRIORITIES, TIPS, WishSchema } from "@/lib/catalog";
 import { ACCEPTED_EXTENSIONS, MAX_BYTES, formatBytes } from "@/lib/models";
 import { FLOW } from "@/lib/scope";
+import { IMPORT_SOURCES } from "@/lib/import-source";
 import { BodySchema, LIST_LIMIT_DEFAULT, LIST_LIMIT_MAX, ReasonSchema } from "@/lib/stories";
 import { NOTIFICATION_LIMIT_MAX } from "@/lib/notifications";
 
@@ -93,24 +94,45 @@ const STORY_SCHEMA = {
     flagged: { type: "boolean" },
     flagReason: { type: ["string", "null"] },
     quantity: { type: "integer", minimum: 1 },
-    material: { type: "string", enum: [...MATERIALS] },
-    color: {
-  type: "object",
-  properties: {
-    name: {
+    priority: {
       type: "string",
-      description:
-        "The filament selected when the request was created. " +
-        "Choices are supplied dynamically by Spoolman.",
-      examples: ["Silk+ PLA – Candy Red"],
+      enum: [...STORY_PRIORITIES],
+      description: "How much it matters to the requester. Orders the owner's queue; promises nothing else.",
     },
-    hex: {
+    material: {
       type: "string",
-      pattern: "^#[0-9A-Fa-f]{6}$",
-      examples: ["#D02727"],
+      description: "The owner-managed material label, snapshotted when the request was made.",
+    },
+  color: {
+    type: "object",
+    properties: {
+      name: {
+        type: "string",
+        description:
+          "The filament selected when the request was created. " +
+          "Choices are supplied dynamically by Spoolman when configured, " +
+          "or by the owner-managed catalog otherwise.",
+        examples: ["Silk+ PLA – Candy Red"],
+      },
+      hex: {
+        type: "string",
+        pattern: "^#[0-9A-Fa-f]{6}$",
+        examples: ["#D02727"],
+      },
+      style: {
+        type: "string",
+        examples: [
+          "#4a5d78",
+          "linear-gradient(135deg, #e4322f, #f6c945)",
+        ],
+        description: "The swatch as a CSS background: a colour or a linear-gradient.",
+      },
+      mode: {
+        type: "string",
+        enum: [...COLOR_MODES],
+      },
     },
   },
-},
     tip: { type: "string", enum: [...TIPS] },
     note: { type: "string" },
     file: {
@@ -129,11 +151,19 @@ const STORY_SCHEMA = {
         url: {
           type: "string",
           description:
-            "Where the bytes are. Proxied through the app, not a signed " +
-            "storage URL — object storage publishes no port in this deployment.",
+            "Where the bytes are. Streamed by the app from its own disk — " +
+            "model files are not in the web root, so there is no other URL.",
           examples: ["/api/models/4"],
         },
       },
+    },
+    source: {
+      type: ["string", "null"],
+      format: "uri",
+      description:
+        "The page the model was imported from, for a ticket opened with " +
+        "`POST /api/import`. Null for an upload.",
+      examples: ["https://www.printables.com/model/3161-3d-benchy"],
     },
     uploader: {
       type: "object",
@@ -303,7 +333,7 @@ export async function buildOpenApiDocument() {
       { name: "queue", description: "The printer owner's actions on a ticket." },
       { name: "conversation", description: "The thread that lives on a ticket." },
       { name: "activity", description: "Your notifications." },
-      { name: "files", description: "Uploading a model, and fetching its bytes." },
+      { name: "files", description: "Uploading or importing a model, and fetching its bytes." },
       { name: "service", description: "Liveness, and this document." },
       ...authHalf.tags,
     ],
@@ -420,6 +450,17 @@ export async function buildOpenApiDocument() {
                 "Only your own requests. Changes nothing for a client, whose " +
                 "scope is already that; narrows the printer owner to theirs.",
               schema: { type: "boolean" },
+            },
+            {
+              name: "uploader",
+              in: "query",
+              description:
+                "Only tickets uploaded by these people, by user id (the `uploader.id` " +
+                "of a ticket). Repeat the parameter, or separate with commas. For the " +
+                "printer owner this is how to list what particular people have sent. " +
+                "For a client it can only return their own tickets or nothing.",
+              schema: { type: "array", items: { type: "string" }, maxItems: 50 },
+              explode: true,
             },
             {
               name: "limit",
@@ -614,6 +655,81 @@ export async function buildOpenApiDocument() {
         },
       },
 
+      "/api/stories/{id}/priority": {
+        post: {
+          tags: ["stories"],
+          summary: "Set a ticket's priority",
+          description:
+            "The requester on their own ticket, or the printer owner on any. " +
+            "Unlike the status, priority is set rather than derived: there is no " +
+            "order to skip a step of. Refused once the ticket is Done or Declined.",
+          parameters: [storyIdParam],
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  required: ["priority"],
+                  properties: { priority: { type: "string", enum: [...STORY_PRIORITIES] } },
+                },
+                example: { priority: "high" },
+              },
+            },
+          },
+          responses: {
+            "200": storyResponse("The ticket, with its priority as it now stands.", {
+              changed: {
+                type: "object",
+                properties: {
+                  from: { type: "string" },
+                  to: { type: "string" },
+                  unchanged: { type: "boolean" },
+                },
+              },
+            }),
+            "400": errorResponse("Not one of low, medium, high."),
+            "404": errorResponse("No such ticket, or not one you may see."),
+            "409": errorResponse("The ticket is Done or Declined."),
+            ...COMMON_ERRORS,
+          },
+        },
+      },
+
+      "/api/stories/{id}/requeue": {
+        post: {
+          tags: ["stories"],
+          summary: "Print one of your tickets again",
+          description:
+            "Opens a fresh `Requested` ticket from the same file — nothing is " +
+            "uploaded. The body is the wish and **every field is optional**: " +
+            "what is left out is carried over from the old ticket, so `{}` " +
+            "repeats it exactly. What is sent is held to the rules an upload " +
+            "is — the material and colour must be in `GET /api/catalog` today, " +
+            "and the tip must be a benefit on offer. The old ticket is not changed.",
+          parameters: [storyIdParam],
+          requestBody: {
+            required: false,
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/Wish" },
+                example: { quantity: 4, material: "PETG", colorName: "Slate", printSettings: "40% infill" },
+              },
+            },
+          },
+          responses: {
+            "201": storyResponse("The new ticket.", {
+              from: { type: "string", examples: ["PPP-104"] },
+            }),
+            "400": errorResponse("A field did not parse."),
+            "403": errorResponse("Only the person who asked for it can print it again."),
+            "404": errorResponse("No such ticket, or not one you may see."),
+            "409": errorResponse("The material, colour or benefit is not on offer any more."),
+            ...COMMON_ERRORS,
+          },
+        },
+      },
+
       "/api/stories/{id}/comments": {
         get: {
           tags: ["conversation"],
@@ -666,6 +782,61 @@ export async function buildOpenApiDocument() {
             },
             "400": errorResponse("Empty, or longer than a comment wants to be."),
             "404": errorResponse("No such ticket, or not one you may see."),
+            ...COMMON_ERRORS,
+          },
+        },
+      },
+
+      "/api/catalog": {
+        get: {
+          tags: ["stories"],
+          summary: "What can be asked for right now",
+          description:
+            "The materials on the shelf and the colours each comes in, in the " +
+            "printer owner's order. `POST /api/upload` accepts exactly these " +
+            "pairs and checks again when the upload arrives, so a pair that was " +
+            "retired in between is refused with 400. Retired entries are not listed.",
+          responses: {
+            "200": {
+              description: "Only materials that have at least one colour on offer.",
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    properties: {
+                      importSources: {
+                        type: "array",
+                        items: { type: "string", enum: [...IMPORT_SOURCES] },
+                        description:
+                          "The sites this instance imports models from — see " +
+                          "`POST /api/import`. Empty when importing is not switched on.",
+                      },
+                      materials: {
+                        type: "array",
+                        items: {
+                          type: "object",
+                          properties: {
+                            name: { type: "string", examples: ["PETG"] },
+                            colors: {
+                              type: "array",
+                              items: {
+                                type: "object",
+                                properties: {
+                                  name: { type: "string", examples: ["Slate"] },
+                                  hex: { type: "string", examples: ["#4a5d78"] },
+                                  style: { type: "string", examples: ["#4a5d78"] },
+                                  mode: { type: "string", enum: [...COLOR_MODES] },
+                                },
+                              },
+                            },
+                          },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
             ...COMMON_ERRORS,
           },
         },
@@ -819,7 +990,177 @@ export async function buildOpenApiDocument() {
             "400": errorResponse("No file attached, a malformed body, or a field the catalogue does not allow."),
             "413": errorResponse("Larger than the cap."),
             "422": errorResponse("The bytes are not an acceptable model. The reason says which check failed."),
-            "502": errorResponse("Object storage would not take it. Nothing was saved."),
+            "502": errorResponse("The file could not be written to disk. Nothing was saved."),
+            ...COMMON_ERRORS,
+          },
+        },
+      },
+
+      "/api/import/files": {
+        post: {
+          tags: ["files"],
+          summary: "List what a link to a model offers",
+          description:
+            "The first of two steps in importing a model from the site it is " +
+            "published on, instead of downloading it and uploading it here. " +
+            "Give it the link to the model's page and it answers with the " +
+            "model and the `.stl` and `.3mf` files in it. A model usually " +
+            "carries several and a ticket holds one, so pick one and send its " +
+            "`id` to `POST /api/import`.\n\n" +
+            "**Off unless the instance switches it on.** `GET /api/catalog` " +
+            "lists the sites in `importSources`; where that is empty this " +
+            "answers `501`.\n\n" +
+            "The link is read for a model id and nothing else. The server " +
+            "does not fetch the address it was given.",
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  required: ["url"],
+                  properties: {
+                    url: {
+                      type: "string",
+                      description: "The model's page.",
+                      examples: ["https://www.printables.com/model/3161-3d-benchy"],
+                    },
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            "200": {
+              description: "The model, and its printable files in the site's order.",
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    properties: {
+                      source: { type: "string", enum: [...IMPORT_SOURCES] },
+                      model: {
+                        type: "object",
+                        properties: {
+                          id: { type: "string", examples: ["3161"] },
+                          name: { type: "string", examples: ["3D BENCHY"] },
+                          url: {
+                            type: "string",
+                            format: "uri",
+                            description: "The model's page, as the ticket will record it.",
+                          },
+                          author: { type: ["string", "null"] },
+                          license: { type: ["string", "null"] },
+                        },
+                      },
+                      files: {
+                        type: "array",
+                        items: {
+                          type: "object",
+                          properties: {
+                            id: { type: "string", examples: ["49068"] },
+                            name: { type: "string", examples: ["3dbenchy.stl"] },
+                            size: { type: "integer", description: "Bytes, as the site lists it." },
+                            tooLarge: {
+                              type: "boolean",
+                              description: `Over ${formatBytes(MAX_BYTES)}, so it cannot be imported.`,
+                            },
+                          },
+                        },
+                      },
+                      otherFiles: {
+                        type: "integer",
+                        description: "How many files the model carries that are neither `.stl` nor `.3mf`.",
+                      },
+                    },
+                  },
+                },
+              },
+            },
+            "400": errorResponse("The body is not a JSON object."),
+            "403": errorResponse("A cross-origin request."),
+            "404": errorResponse("The site has no model at that link."),
+            "422": errorResponse("Not a link to a model on a site this instance imports from."),
+            "501": errorResponse("Importing is not switched on for this instance."),
+            "502": errorResponse(
+              "The site could not be reached, or answered in a way this app does not " +
+                "recognise. Its API is not a published one and can change.",
+            ),
+            ...COMMON_ERRORS,
+          },
+        },
+      },
+
+      "/api/import": {
+        post: {
+          tags: ["files"],
+          summary: "Import a model from a link and open a request",
+          description:
+            "`POST /api/upload` without the upload: the server fetches one " +
+            "file from the model's page and opens a ticket from it. The body " +
+            "is the wish an upload carries, plus `url` and the `fileId` chosen " +
+            "from `POST /api/import/files`.\n\n" +
+            "From there it is an upload in every respect. The decision is made " +
+            "on the **bytes** that arrive, not on what the site called them; " +
+            "nothing reaches storage until they have been inspected, and no " +
+            "ticket exists until the file is in place. The ticket records " +
+            "where the model came from in `source`.\n\n" +
+            "The wish is checked before anything is fetched. The file must be " +
+            `at most ${formatBytes(MAX_BYTES)}, and is refused if it arrives ` +
+            "larger than the site listed it.",
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: {
+                  allOf: [
+                    { $ref: "#/components/schemas/Wish" },
+                    {
+                      type: "object",
+                      required: ["url", "fileId"],
+                      properties: {
+                        url: {
+                          type: "string",
+                          description: "The model's page.",
+                          examples: ["https://www.printables.com/model/3161-3d-benchy"],
+                        },
+                        fileId: {
+                          type: "string",
+                          description: "One of the `files[].id` values listed for that model.",
+                          examples: ["49068"],
+                        },
+                      },
+                    },
+                  ],
+                },
+                example: {
+                  url: "https://www.printables.com/model/3161-3d-benchy",
+                  fileId: "49068",
+                  material: "PETG",
+                  colorName: "Slate",
+                  quantity: 1,
+                  tip: "A beer",
+                },
+              },
+            },
+          },
+          responses: {
+            "201": storyResponse("Fetched, stored, and the printer owner was told."),
+            "400": errorResponse("A malformed body, no `fileId`, or a field the catalogue does not allow."),
+            "403": errorResponse("A cross-origin request."),
+            "404": errorResponse("The site has no model at that link, or that file is not one of its printable files."),
+            "413": errorResponse("Larger than the cap."),
+            "422": errorResponse(
+              "Not a link to a model on a site this instance imports from — or the " +
+                "bytes that arrived are not an acceptable model. The reason says which.",
+            ),
+            "501": errorResponse("Importing is not switched on for this instance."),
+            "502": errorResponse(
+              "The site could not be reached, would not hand the file over, pointed " +
+                "somewhere this app does not fetch from, or sent more than it listed. " +
+                "Nothing was saved.",
+            ),
+            "503": errorResponse("Too many models are being handled at once. Send it again in a moment."),
             ...COMMON_ERRORS,
           },
         },
@@ -830,10 +1171,8 @@ export async function buildOpenApiDocument() {
           tags: ["files"],
           summary: "Download the model",
           description:
-            "The bytes, streamed through the app rather than handed out as a " +
-            "signed storage URL — object storage publishes no port in this " +
-            "deployment, so a signed URL would point at something a browser " +
-            "cannot reach.\n\n" +
+            "The bytes, streamed by the app from its own disk. Model files " +
+            "are not in the web root, so this route is the only way to them.\n\n" +
             "Scoped like the ticket: someone else's model is `404`. A download " +
             "by anyone other than the uploader is written to the audit trail.",
           parameters: [storyIdParam],
@@ -844,7 +1183,7 @@ export async function buildOpenApiDocument() {
             },
             "401": { description: "No session." },
             "404": { description: "No such ticket, or not one you may see." },
-            "502": { description: "Object storage did not answer." },
+            "502": { description: "The file could not be read from disk." },
           },
         },
       },

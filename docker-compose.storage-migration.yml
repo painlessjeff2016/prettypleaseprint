@@ -1,0 +1,101 @@
+# One-shot: copy the models out of MinIO onto the filesystem.
+#
+#   docker compose --env-file .env.docker \
+#     -f docker-compose.prod.yml -f docker-compose.storage-migration.yml \
+#     run --rm --build migrate-storage
+#
+# Its own overlay, and its own service, because neither existing image can do
+# this job. The runner carries only the Next standalone bundle — no scripts, no
+# tsx. The migrator deliberately installs "exactly three packages, not the whole
+# dependency tree" and copies only prisma/, which is the right call for a thing
+# that applies migrations at every boot and the wrong shape for this. Teaching
+# either of them about the AWS SDK to run a migration once would be a permanent
+# cost for a temporary need.
+#
+# So this builds the `builder` stage, which already has the full source tree and
+# the full node_modules, and runs the script there. It is deleted along with the
+# rest of the MinIO furniture once the object store is gone.
+#
+# STOP THE STACK FIRST. `docker compose ... down`, then run this.
+#
+# Not politeness — it is a corruption risk. This overlay brings its own MinIO,
+# `ppp-minio-migration`, mounting $DATA_ROOT/models. A deployment that has not
+# been upgraded yet is still running `ppp-minio` from the previous release
+# against that same directory, and the two names do not collide, so Compose will
+# happily start the second one. Two MinIO processes on one data directory is not
+# a supported configuration and the data is the thing you are trying to rescue.
+#
+# The likely path into it is the ordinary one: pull the new release, run the
+# migration, then deploy. The old container survives the git pull. So: down,
+# migrate, deploy, up.
+#
+# Nothing here is destructive: the script only ever creates files under
+# /uploads, and refuses outright if pointed at MinIO's own data directory.
+#
+# It brings its own MinIO, and that is the point. The moment anyone reaches for
+# this overlay is after pulling a release whose compose files no longer define
+# an object store — so depending on one from docker-compose.prod.yml would make
+# the migration unusable exactly when it is needed. Both services sit behind the
+# `migration` profile, so neither starts unless asked for by name.
+services:
+  # The image the stack ran before the switch, reading the data directory it
+  # left behind. Pinned by digest for the same reason it always was: the tag it
+  # was published under no longer points at these bytes.
+  minio:
+    image: ghcr.io/danileau/minio@sha256:52dfd5c0bbd38d3219f2058c7af216d9f9a27a994b7b5baad09bbd38866015ff
+    container_name: ppp-minio-migration
+    profiles: ["migration"]
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY:-ppp}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:?set S3_SECRET_KEY}
+    volumes:
+      # Read-write, reluctantly: MinIO writes its own .minio.sys metadata on
+      # start and will not come up otherwise, so :ro is not available however
+      # much the intent suits it. The export only ever reads, and it writes
+      # exclusively under /uploads — but that is a property of the script
+      # rather than something the mount enforces.
+      - ${DATA_ROOT:-./data}/models:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  migrate-storage:
+    # A published image, not a build. A deployment holds four files and no
+    # source tree — docker-compose.prod.yml consumes images for exactly that
+    # reason — so `build: { context: . }` here made this overlay unusable on the
+    # only machine that needs it. Pinned to the same PPP_TAG as the rest of the
+    # stack, so the migration is the one that shipped with the release you are
+    # moving to.
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: storage-migrator
+    image: ppp-storage-migrate:local
+    container_name: ppp-storage-migration
+    # Deliberately not in the default set: `run` reaches it by name, and no
+    # `up` can start it by accident.
+    profiles: ["migration"]
+    environment:
+      DATABASE_URL: postgresql://ppp:${DB_PASSWORD:?set DB_PASSWORD}@db:5432/ppp?schema=public
+      # Service names, not localhost: prod publishes no port for MinIO, which
+      # is exactly why this runs inside the network rather than on the host.
+      S3_ENDPOINT: http://minio:9000
+      S3_BUCKET: ${S3_BUCKET:-ppp-models}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-ppp}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:?set S3_SECRET_KEY}
+      MODELS_ROOT: /uploads
+      # Who the files must belong to afterwards: the app's uid, from the
+      # Dockerfile's `USER nextjs`. This container runs as root so it can write
+      # into a bind mount Docker created as root, then hands the files over.
+      MODELS_UID: "1001"
+      MODELS_GID: "1001"
+    volumes:
+      - ${DATA_ROOT:-./data}/uploads:/uploads
+    depends_on:
+      db:
+        condition: service_healthy
+      minio:
+        condition: service_healthy

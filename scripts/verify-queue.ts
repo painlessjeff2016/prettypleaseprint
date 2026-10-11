@@ -192,6 +192,93 @@ async function main() {
         paramOf(accepted.headers.get("location"), "toast"));
 
   // ------------------------------------------------------------------
+  section("priority orders the queue, and is changed on the ticket");
+  const routine = await makeStory(ayla.id, "Routine drawer organiser");
+  const rush = await makeStory(ayla.id, "Rush job for Friday");
+  await db.story.update({ where: { id: rush.id }, data: { priority: "high" } });
+  const someday = await makeStory(ayla.id, "Someday desk toy");
+  await db.story.update({ where: { id: someday.id }, data: { priority: "low" } });
+
+  const ordered = rendered(await (await ruben.go(`${APP}/queue`)).text());
+  const at = (title: string) => ordered.indexOf(title);
+  check("the urgent one is first in Waiting on you, though it was filed later",
+        at("Rush job for Friday") > 0 && at("Rush job for Friday") < at("Routine drawer organiser") &&
+        at("Routine drawer organiser") < at("Someday desk toy"),
+        `${at("Rush job for Friday")} / ${at("Routine drawer organiser")} / ${at("Someday desk toy")}`);
+
+  const ticket = await (await client.go(`${APP}/story/${routine.id}`)).text();
+  const prioForm = (ticket.match(/<form\b[\s\S]*?<\/form>/g) ?? [])
+    .findIndex((f) => f.includes('name="priority"'));
+  check("the requester's ticket offers a priority control", prioForm >= 0);
+  const set = await client.submit(`${APP}/story/${routine.id}`, ticket, prioForm, { priority: "high" });
+  check("submitting it is accepted", set.status >= 300 && set.status < 400, `status ${set.status}`);
+  check("and the ticket's priority changed",
+        (await db.story.findUnique({ where: { id: routine.id } }))?.priority === "high");
+  const board = rendered(await (await client.go(`${APP}/board`)).text());
+  const cardOf = (title: string) => {
+    const i = board.indexOf(title);
+    return i < 0 ? "" : board.slice(Math.max(0, i - 900), i);
+  };
+  check("a high ticket's card says so", />High</.test(cardOf("Routine drawer organiser")));
+  await db.story.update({ where: { id: routine.id }, data: { priority: "medium" } });
+  const boardAfter = rendered(await (await client.go(`${APP}/board`)).text());
+  const j = boardAfter.indexOf("Routine drawer organiser");
+  check("a medium one's does not",
+        j > 0 && !/>(High|Medium|Low)</.test(boardAfter.slice(Math.max(0, j - 900), j)));
+
+  await db.story.update({ where: { id: routine.id }, data: { status: "Done" } });
+  const done = await (await client.go(`${APP}/story/${routine.id}`)).text();
+  check("a finished ticket no longer offers the control", !done.includes('name="priority"'));
+  await db.story.deleteMany({ where: { id: { in: [routine.id, rush.id, someday.id] } } });
+
+  // ------------------------------------------------------------------
+  section("prints by person — the owner picks people and sees what they sent");
+  const bea = await db.user.create({
+    data: { email: "bea@office.example", name: "Bea Quist", initials: "BQ", role: "client",
+            emailVerified: true, invitedById: admin.id },
+  });
+  const aylaPart = await makeStory(ayla.id, "Ayla's cable clip");
+  const beaPart = await makeStory(bea.id, "Bea's phone stand", "Done");
+  const beaOther = await makeStory(bea.id, "Bea's declined thing", "Declined");
+
+  const hidden = await client.go(`${APP}/admin/prints`);
+  check("a client gets 404 for the page", hidden.status === 404, `status ${hidden.status}`);
+  check("and for a selection naming a colleague",
+        (await client.go(`${APP}/admin/prints?who=${bea.id}`)).status === 404);
+
+  const nobody = rendered(await (await ruben.go(`${APP}/admin/prints`)).text());
+  check("with nobody picked it lists the people, each with their count, and no tickets",
+        nobody.includes("Bea Quist") && nobody.includes(ayla.name) &&
+        nobody.includes("Nobody picked yet") && !nobody.includes("Bea's phone stand"));
+
+  const justBea = rendered(await (await ruben.go(`${APP}/admin/prints?who=${bea.id}`)).text());
+  check("picking one person shows everything they uploaded, in any state",
+        justBea.includes("Bea's phone stand") && justBea.includes("Bea's declined thing") &&
+        justBea.includes("2 tickets from Bea Quist"));
+  check("and nobody else's", !justBea.includes("Ayla's cable clip"));
+
+  const both = rendered(await (await ruben.go(`${APP}/admin/prints?who=${bea.id}&who=${ayla.id}`)).text());
+  check("picking several shows all of theirs",
+        both.includes("Bea's phone stand") && both.includes("Ayla's cable clip"));
+  check("a picked person's link takes them back out",
+        both.includes(`href="/admin/prints?who=${ayla.id}"`) || both.includes(`href="/admin/prints?who=${bea.id}"`));
+
+  const junk = rendered(await (await ruben.go(`${APP}/admin/prints?who=nobody-real&who=${bea.id}`)).text());
+  // Asserted on the links the page draws, not on the whole document: Next
+  // copies the raw query string into its own payload, so the junk id is in the
+  // HTML either way and "it appears nowhere" would fail for a correct page.
+  check("an id that names nobody is dropped — it is in none of the links the page builds",
+        junk.includes("Bea's phone stand") && !/href="[^"]*nobody-real/.test(junk) &&
+        junk.includes("2 tickets from Bea Quist"));
+
+  const guestRows = await (await ruben.go(`${APP}/admin/invites`)).text();
+  check("the guest list links each member to their prints",
+        guestRows.includes(`/admin/prints?who=${bea.id}`));
+
+  await db.story.deleteMany({ where: { id: { in: [aylaPart.id, beaPart.id, beaOther.id] } } });
+  await db.user.delete({ where: { id: bea.id } });
+
+  // ------------------------------------------------------------------
   section("the flow only moves forward, one step at a time");
   for (const expected of ["Printing", "Delivery", "Done"]) {
     page = await (await ruben.go(`${APP}/queue`)).text();
@@ -293,8 +380,17 @@ async function main() {
     check(`posting the ${label} action as a client changes nothing`,
           after?.status === before, `status became ${after?.status}`);
   }
-  check("the client never appears as an actor in the trail",
-        (await db.auditEvent.count({ where: { actorId: ayla.id, action: { startsWith: "story." } } })) === 0);
+  // The verbs those owner actions write, named — not every `story.*`. A client
+  // is a legitimate actor on some of them now (changing the priority of their
+  // own ticket, above), and "no story verb at all" would have this check fail
+  // for a reason that has nothing to do with what it is guarding.
+  check("the client never appears as the actor of an owner's action",
+        (await db.auditEvent.count({
+          where: {
+            actorId: ayla.id,
+            action: { in: ["story.status_changed", "story.declined", "story.flagged", "story.flag_cleared"] },
+          },
+        })) === 0);
 
   // ------------------------------------------------------------------
   section("the conversation");

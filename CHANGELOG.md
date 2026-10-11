@@ -7,6 +7,326 @@ Notable changes. Every entry names a released version; deployments pin
 
 ### Added
 
+- **A request can start from a Printables link instead of an upload** (#91).
+  Where the printer owner switches it on, the request form offers *or paste a
+  Printables link* under the dropzone. Paste the address of a model's page and
+  the app lists the `.stl` and `.3mf` files in it; pick one, fill in the rest
+  as usual, and the server fetches the file itself. Nobody downloads a model
+  only to upload it again. The ticket links back to the model's page, where the
+  author, the licence and the print notes are.
+
+  From the moment the bytes arrive it is an upload: the same inspection, the
+  same refusal of anything that is not really an STL or 3MF, the same 250 MB
+  limit. What a model site says a file is counts for nothing.
+
+  **Off by default**, because it makes the server call somebody else's on a
+  requester's say-so: set `IMPORT_SOURCES="printables"`. A requester chooses a
+  model and never an address — the pasted link is read for a numeric id and
+  thrown away, the file is fetched only from the one origin Printables serves
+  from, and redirects are refused rather than followed. It speaks the API the
+  Printables website uses, which is not a published one and can change; when
+  it does, importing says so and points at the upload. Read
+  [Importing from a link](docs/deployment.md#importing-from-a-link) first.
+
+  Only Printables. MakerWorld and Thingiverse were asked for too and are not
+  supported; [the architecture notes](docs/architecture.md#importing-from-a-link)
+  say why.
+
+  Over the API it is `POST /api/import/files` to list and `POST /api/import` to
+  open the request, `GET /api/catalog` says whether an instance imports at all,
+  and every ticket carries `source` — the model's page, or `null` for an
+  upload. `npm run verify:import` is the eleventh suite, and runs against a
+  stand-in for Printables so that the far end can be made to misbehave.
+
+### Changed
+
+- **Opening a ticket from a model's bytes lives in one place.** It was the body
+  of the upload route while that was the only way a model arrived;
+  `src/lib/intake.ts` now holds it and the upload and the import both call it.
+  The limit on how many models are held in memory at once moved with it and is
+  shared, so an upload and an import in flight together count as two, not one
+  each. Nothing about uploading changes.
+
+- **The documentation caught up with v0.3.0.** A sweep of every guide against
+  the code as released. The architecture guide's file layout had drifted
+  furthest — half of `src/lib` sat under an `src/app/` heading and a dozen
+  files were missing — and is rewritten from the tree. The development guide
+  said passkeys were "not covered" by any suite, which stopped being true when
+  `verify:passkey` arrived; it now says what is and is not (a real browser
+  with a virtual authenticator is; a physical device is not), lists the sign-up
+  check that came with the invite-link fix, and counts the wizard tests among
+  the cheap gates. `SECURITY.md` said `main` was the only supported version,
+  from before there were releases. The README mentions the release wizard and
+  that the deploy wizard reads upgrade notes, and the deployment guide says the
+  thing that is easy to miss: the wizard on the host is a copy, and has to be
+  copied again to get a newer one. The pull-request template lists all ten
+  suites, the wizard tests and the rollback check for a migration.
+
+### Fixed
+
+- **The last places that still described an object store.** MinIO left in
+  v0.2.0, and a handful of comments, two documents and the API's own
+  descriptions went on talking about it. The OpenAPI document said a model was
+  proxied because "object storage publishes no port" and that a `502` meant
+  "object storage did not answer"; both now say what happens, which is a file
+  on disk that could not be written or read. The README's feature list, the
+  schema and the route that serves models say the same. CI stops generating an
+  `S3_SECRET_KEY` that nothing has read since.
+
+  Two open items in the [security audit](docs/security-audit.md) are brought
+  up to date with it: signed model URLs are closed by removal rather than
+  pending, and the reason recorded for `Cross-Origin-Embedder-Policy:
+  credentialless` no longer names a storage origin that does not exist.
+
+- **`source-map-js` 1.2.1 → 1.2.2**, for CVE-2026-93749 (HIGH): a malformed
+  indexed source map could hang whatever parsed it. It arrives through PostCSS
+  and Tailwind, which run when the stylesheet is built, and the Trivy gate
+  fails on it. Lockfile only.
+
+## v0.3.0
+
+2026-10-04.
+
+### Added
+
+- **Prints by person.** The owner's views answered what is waiting, where
+  everything is and what has finished, and none answered "what has Ayla sent
+  me". `/admin/prints` lists everybody who can upload, with a count each; pick
+  one person or several and it shows everything they have uploaded, in any
+  state, newest first. Each person is a link that adds or removes themselves,
+  so a selection can be bookmarked, and every member on the guest list now
+  links straight to theirs — the thing to look at before resetting or
+  suspending somebody.
+
+  Over the API it is `GET /api/stories?uploader=<id>,<id>`. Like every filter
+  there it can only narrow: a client naming a colleague gets nothing, and the
+  roster with its counts is refused to anyone but the owner.
+
+- **`scripts/release-wizard.sh` — a release, walked end to end.** v0.2.0 was cut
+  by hand from a list of steps, and the tag went onto the wrong commit: the
+  command named `origin/main`, and the local copy of it was one merge behind.
+  The wizard does the steps and stops for a yes before each one that cannot be
+  taken back — prepare the branch, open the pull request, push the tag, publish
+  the release.
+
+  It prepares `release-X.Y.Z` (the changelog section, the version, the example
+  image tags, and an *Upgrading* stub to fill in when a migration was added),
+  runs the full local test, opens the pull request and **waits**. Merging stays
+  the owner's; the script contains no merge. Then it tags the pull request's
+  merge commit **by its SHA**, read from GitHub and never from a branch name,
+  after checking that commit is on `main`, carries the version bump, and passed
+  CI. It waits for the tag's image build to succeed and for every image to
+  exist at the version, and only then publishes the GitHub release — short
+  notes, with the *Upgrading* section kept, because the deploy wizard reads it.
+
+  There is no state file. `--continue X.Y.Z` works out where a release got to
+  from git and GitHub, so an interrupted run resumes from any machine.
+  `--status` and `--dry-run` change nothing.
+
+- **`scripts/full-test.sh` — the full local run, as one command.** The whole
+  stack raised from source on a throwaway data directory and every suite run
+  against it, which until now was a paragraph of instructions and a script that
+  lived in nobody's checkout. It restores `.env`, `.env.backup` and
+  `.env.docker` exactly — after a failure, after Ctrl-C, after Ctrl-C during the
+  teardown — and `--restore` puts them back after a run that was killed
+  outright. It **refuses to start** if a ppp stack exists on the machine, or if
+  the ports are taken, rather than take somebody's instance down; and it will
+  not run the suites, which wipe users and tickets, against anything it did not
+  raise itself.
+
+  Both are tested in sandboxes — a local bare repository standing in for
+  GitHub, stub `gh`, `docker` and `npm`, and a `PATH` that cannot reach the real
+  ones — with 145 cases in CI's `guard` job. The tests were then tested: the
+  scripts were broken thirty-two ways, and each break that went unnoticed got a
+  case that fails on it.
+
+- **The deploy wizard shows what an upgrade needs before it swaps anything.**
+  v0.2.0 could not be deployed over v0.1.0 without moving the models first, and
+  the only place that said so was a changelog the NAS does not have. The wizard
+  now reads the GitHub release of every version between the one running and the
+  one chosen, prints each one's *Upgrading* section, and asks for an explicit
+  yes before the existing deploy prompt. A rollback shows them too, under a
+  header that says it is going back.
+
+  A commit SHA is placed among the releases by ancestry, through GitHub's
+  compare API, not by date. When the wizard cannot work out what lies in
+  between — the running tag is `latest`, a version has no published release,
+  history has diverged, the API is rate-limited, or a release's notes mention
+  upgrading in a shape it cannot parse — it says so, says the notes were not
+  shown, and asks. It never concludes "nothing to read" from a failure.
+
+  Two smaller things with it. Releases are **marked in the menu** with their
+  title, so `v0.2.0` reads as more than a tag. And a version whose images are
+  **not all published yet** is refused before anything is pulled: a tag exists a
+  few minutes before its images do, which is how a deploy fails halfway.
+
+  A deploy from one commit to another with no release in between asks nothing
+  new: that path is pinned by a transcript captured from the wizard before this
+  change. `scripts/tests/deploy-wizard.test.sh` runs the script in a sandbox
+  with stubbed `docker`, `curl` and `cosign` — 66 cases, in CI's `guard` job —
+  and was itself tested by breaking the wizard thirty-six ways and adding a
+  case for each break that went unnoticed.
+
+### Fixed
+
+- **Choosing a number past the end of the wizard's menu crashed it** with an
+  unbound-variable error where it should have said *invalid selection*.
+- **End of input at a wizard prompt exited silently.** It now says
+  `aborted (no input).` and exits 1; at the token prompt it means "no token",
+  so `./deploy-wizard.sh --status </dev/null` prints the table.
+
+## v0.2.0
+
+2026-10-04. Six weeks of the app being used: what people asked for, what broke,
+and one piece of infrastructure removed. It is a bigger step than the number
+suggests, and it is **not** a drop-in upgrade from v0.1.0 — read the next
+section before changing `PPP_TAG`.
+
+### Upgrading from v0.1.0
+
+- **The object store is gone, and the models have to be moved first.** v0.1.0
+  kept model files in MinIO; this release keeps them as plain files in
+  `$DATA_ROOT/uploads` and has no storage service at all. Starting v0.2.0
+  against a v0.1.0 data directory gives you every ticket and no geometry. Stop
+  the stack, run the one-shot `ppp-storage-migrate` container, read its
+  verification, then deploy — the exact commands, and why copying MinIO's
+  directory by hand loses most of the files, are in
+  [Moving the models onto the filesystem](docs/deployment.md#moving-the-models-onto-the-filesystem).
+  Take a snapshot first.
+- **Eleven database migrations run by themselves**, in the `migrate`
+  container, as before.
+- **There is no rolling back to v0.1.0 afterwards, except from a snapshot.**
+  That image expects the object store and the old order of the status flow,
+  and nothing here was tested against it. The deploy wizard's automatic
+  rollback will still try if the health check fails, so the snapshot from the
+  step above is the real way back. (Each of the last three migrations *was*
+  tested against the image immediately before it, which is what matters if you
+  follow `main` by commit. One caveat from that is recorded in the
+  `account_issuer_optional` migration.)
+- **Sessions are twenty idle minutes**, not a renewing month, and handing out
+  access asks for the password or passkey again. People will notice.
+- **A security fix you should deploy for.** An invited address could be
+  registered without its invite link (finding 10 in the
+  [security audit](docs/security-audit.md)). If an invitee ever found their
+  link already used, look at that account.
+- **Behind Cloudflare:** Rocket Loader must be off or nobody can sign in, and
+  the edge caps uploads at 100 MB whatever the app allows.
+- **Platform:** the images are `linux/amd64`. v0.1.0's documentation offered a
+  Raspberry Pi 5 that never worked.
+- **Environment:** the `S3_*` variables are no longer read and can be removed
+  from `.env.docker`. Nothing new is required.
+
+### Added
+
+- **A print request has a priority.** Feature requests have carried one since
+  FRR-104; print requests, which are what the printer owner actually queues,
+  did not. A request is now low, medium or high — chosen on the request form,
+  medium if nothing is said — and the owner's *Waiting on you* lists high
+  first, oldest first within a priority. The requester can change it on their
+  own ticket and the owner on any, the other is told, and the trail records
+  where it moved from.
+
+  Two things are different from the feature-request side, on purpose. It can
+  only be changed while the ticket is still on the rail: a finished print has
+  nothing left to order, and editing it afterwards would rewrite what the
+  history says was asked for. And the board card marks priority only when it is
+  not medium — a chip on every card is a chip nobody reads.
+
+  Over the API it is `priority` on a ticket, an optional `priority` field on
+  `POST /api/upload` and on a re-queue, and `POST /api/stories/{id}/priority`.
+  Optional on upload so a client written before this still files a request.
+  The column is additive with a default, so the previous image runs against the
+  migrated database unchanged.
+
+- **Materials and colours are owner-managed.** `/admin/catalog` replaces the
+  fixed compile-time list with an ordered catalogue. The owner can add, rename,
+  temporarily hide, remove, and reorder materials and their colours. Swatches
+  can be solid, a two-colour gradient, or an explicit “whatever” rainbow with
+  a question mark. Uploads validate against the live catalogue on the server;
+  old tickets retain label, representative colour, rendered swatch, and mode
+  snapshots when catalogue entries later change. `npm run verify:catalog`
+  covers the owner-only forms, ordering, validation, and snapshot contract.
+
+  Five things were put right in review, each of them found by running it
+  against a database that already had tickets rather than a fresh one:
+
+  - **A rollback could not file a request.** The migration dropped the
+    `Material` enum, which the previous image's client still casts every insert
+    to. Rolled back onto the migrated database, every page rendered and every
+    upload answered 500. A follow-up migration puts the type back, unused.
+  - **The colour band on every board card had vanished**, and "whatever"
+    tickets showed a clipped question mark in the corner instead. The swatch
+    component and its caller disagreed about `display`.
+  - **Printing a ticket again lost its swatch and ignored the shelf.** The copy
+    came back solid, and it worked for a colour the owner had just retired
+    while a fresh upload of the same colour was refused. A re-queue now makes
+    the same catalogue lookup an upload does.
+  - **Old "Whatever's on" tickets had been repainted** from grey to purple in
+    the viewer and the audit tally. Their representative colour is back to
+    what they were filed with; the rainbow stays in the swatch.
+  - **The catalogue page ran off the side of a phone**, and `/history` drew
+    gradients as flat dots.
+
+  `GET /api/catalog` is new: once the choices stopped being a fixed list the
+  OpenAPI document could no longer enumerate them, and reading the upload
+  page's HTML was the only way for an API client to learn a valid pair. A
+  ticket's `color` now carries `style` and `mode` beside `hex`.
+
+- **Rocket Loader has to be off, and the docs now say so.** Reported by NelsonFx
+  on the pull request that added the tunnel overlay, and it is the first thing an
+  orange-clouded deployment hits. Cloudflare's Rocket Loader rewrites every
+  `<script>` to load through its own deferred loader, and the rewritten tags do
+  not carry the per-request nonce that `script-src 'self' 'nonce-…'
+  'strict-dynamic'` requires — so hydration never happens and no client-side code
+  runs at all.
+
+  The failure is quieter than an error: every page renders from server HTML and
+  looks right, and simply does nothing. Sign-in is where it shows first, because
+  `/signin` is a client component and both the passkey and password paths go
+  through the auth client, but it takes the upload progress bar, the viewer and
+  the Activity menu with it. CSP violations appear in the browser console and
+  nothing appears in the app's logs, because the requests never arrive.
+
+  There is no way to keep both: the alternative is `unsafe-inline`, which throws
+  away what the nonce is for. Documented in the README's troubleshooting list and
+  in the Cloudflare section of [deployment](docs/deployment.md), with Auto Minify
+  and Brotli noted as safe.
+
+- **`npm run migrate:storage` — copy every model out of MinIO, and prove the
+  copy is complete.** The first step of removing the object store, and it
+  changes nothing about how the app runs: the app keeps reading from MinIO, and
+  rolling back is deleting what the script wrote.
+
+  It exists as code rather than a documented `mc` command because of one fact
+  about MinIO's on-disk format. Objects are not files — each is a directory
+  named after the key, and anything under the inline threshold lives *inside*
+  `xl.meta` rather than beside it. On the dataset this was written against, 160
+  of 179. So `cp -r` recovers the nineteen that have a separate part file and
+  silently loses the rest: the tree is there, the filenames are there, every
+  ticket page renders, and the only symptom is that opening a model fails. The
+  bytes come out through the S3 API or not at all.
+
+  The verification is the half that matters, and it interrogates the
+  **database**, not MinIO — asking the object store whether it exported
+  everything is asking the wrong witness, since it would confirm all 179 while
+  160 arrived empty. Every `Story` row must have a readable file of the size the
+  row records, whose first bytes are still the model it claims to be: a binary
+  STL states its own triangle count, and `84 + count × 50` has to equal the file
+  length, which is the same structural check the upload validator makes. A
+  zero-filled file of the right size passes a size comparison and fails this.
+
+  It refuses to exit 0 with a single row unaccounted for, and it refuses to run
+  at all if pointed at MinIO's own data directory — the one mistake that would
+  not be recoverable, so it is blocked in code rather than in prose. Writes are
+  atomic (temp file, `fsync`, rename, `fsync` the directory), because S3 gave
+  that for free and a database row will claim the file is whole. Re-running
+  skips what is already correct, so it can be run now and again just before the
+  switch to pick up anything uploaded in between.
+
+  Verified by breaking it on purpose: truncating one exported file and deleting
+  another makes it exit 1 and name both, and a re-run repairs exactly those two
+  and nothing else. A verifier nobody has watched fail is not a verifier.
+
 - **`/admin/audit` is a dashboard now, not just a log.** The page was built on
   the argument that a screen somebody glances at beats alerts nobody tunes —
   which only holds if somebody actually looks, and a wall of rows is not
@@ -29,6 +349,30 @@ Notable changes. Every entry names a released version; deployments pin
 
   Pure aggregation: no new column, nothing recorded for it, and no charting
   library — a CDN would be refused by `script-src 'self'` and it is four bars.
+
+- **A Cloudflare Tunnel overlay, for a deployment whose public address is not
+  its own to keep.** `docker-compose.tunnel.yml` runs a `cloudflared` connector
+  beside the app, and is used *instead of* `docker-compose.proxy.yml`. The
+  origin dials outward, so there is no port to forward, no `A` record to keep
+  current, and an address the ISP can take back stops being able to take the
+  site down. That is the failure it was written for: a DSL-to-cable migration
+  handed the old address back, the record went on pointing at an IP that no
+  longer routed, and Cloudflare answered 522 while the app stayed healthy, its
+  certificate valid and its own logs entirely quiet — because from the app's
+  side nothing was wrong.
+
+  It publishes no host port, which is the condition that keeps
+  `TRUST_PROXY_HEADERS=cloudflare` honest rather than merely set, and it
+  deliberately declares no `environment:` of its own: a service-level value
+  beats `env_file:`, so an overlay that hard-codes one overrules `.env.docker`
+  in silence. That is the trap `docker-compose.proxy.yml` already carries a
+  paragraph about, and repeating it here would have been the same bug twice.
+
+  Documented beside the Nginx Proxy Manager route, along with the limit
+  Cloudflare imposes either way: its request-body cap is 100 MB on Free and
+  Pro against this app's own 250 MB, and over it the edge answers 413 before
+  the app is reached at all. Any orange-clouded deployment already has that
+  ceiling, tunnel or not.
 
 - **Models up to 250 MB, from 50 MB.** Real work went past the old cap —
   multi-object plates and scanned meshes — and the app's answer was "decimate
@@ -255,6 +599,145 @@ Notable changes. Every entry names a released version; deployments pin
 
 ### Changed
 
+- **Printing a ticket again opens the request form, so the second go can be
+  different.** "Print again" used to be one click that cloned the old ticket
+  exactly. But a second print is rarely the first one repeated — the test came
+  out too weak, or the wrong colour, or one was not enough — so the requester
+  filed a ticket they already knew was wrong and explained the difference in a
+  comment. It now leads to `/story/{id}/again`: the request form without the
+  dropzone, filled in with the old wish. Title, material, colour, quantity,
+  benefit, note and print settings can all be changed; the file cannot, because
+  a different model is a different request. Nothing is created until the form
+  is sent, and the old ticket is never touched.
+
+  A choice that has left the shelf since — a retired material, colour or
+  benefit — is replaced by the default and **said out loud** above the form,
+  rather than silently swapped or left to fail on submit.
+
+  Behind it is `POST /api/stories/{id}/requeue`, which the API did not have at
+  all before. The body is the wish with every field optional: `{}` repeats the
+  ticket, `{ "quantity": 4 }` asks for four. The merged wish goes through the
+  same schema, the same catalogue lookup and the same benefit check as an
+  upload. The audit row records *which* fields changed, not what they said.
+  The old server action is gone, so there is one implementation.
+
+  What this costs: the old control was a plain form that worked with
+  JavaScript off. The request form never did, and printing again now shares
+  that. `verify:upload` covers the page, the tuned copy, the refusals and both
+  ownership rules.
+
+- **The documentation caught up with the code.** A sweep after the object store
+  came out, because several documents were describing a stack that no longer
+  exists rather than being wrong in small ways.
+
+  `docs/architecture.md` gained a **Storage is a directory** section — it is the
+  design document and had nothing to say about the largest structural change in
+  the project, while still describing `storage.ts` as "S3/MinIO, signed URLs".
+  The viewer's byte-path reasoning, the upload ordering, the wire-format note and
+  the file layout all now describe files rather than objects.
+
+  `docs/development.md`'s stack table and dev-compose line still promised MinIO
+  on `:9000`, and its reason for preferring `docker compose` over GitHub
+  `services:` was half about MinIO needing a command override — which left with
+  the object store, so the sentence now keeps the reason that survived and notes
+  which one did not. `release-images.yml` also publishes a third image now.
+
+  Counts that had drifted: **nine** suites, not eight, in both the README and
+  CONTRIBUTING — and CONTRIBUTING's claim that all of them run against the built
+  image was never quite true, since `verify:models` is a pure-function test in its
+  own gate. `probe:security` is **120** probes, not 103; `verify:models` is 32
+  checks, not 29; `verify` runs eight integration suites, not five; and `guard`
+  runs three cheap gates, not two.
+
+
+- **The object store is gone. Model files are files.** MinIO served an S3 API
+  that this app never needed: every byte was already proxied through
+  `/api/models/[id]` — the deployment publishes no port for storage, so a
+  signed URL would have pointed at something the browser cannot reach — and
+  the whole surface was six calls. Head and create a bucket, put, get, delete,
+  copy. Those are `stat`, `mkdir`, a write, a read, `unlink` and `copyFile`.
+
+  What it cost in exchange was a container, a credential pair, a healthcheck,
+  two AWS SDK packages, and finally a supply-chain problem: MinIO withdrew its
+  community images *and* binaries, so the project ended up mirroring one and
+  then compiling its own, which still carried 63 HIGH/CRITICAL advisories no
+  upgrade fixes. For five people and one printer, putting a few hundred
+  megabytes of STL onto a disk the app already has mounted, that was a great
+  deal of machinery to keep alive.
+
+  Files land in `$DATA_ROOT/uploads`, mode 644 under 755 directories —
+  deliberately readable, so a backup needs no root. Postgres' data directory
+  being mode 700 is why the README carries a paragraph about backing up from
+  inside a container; one such trap is enough, and models are not secret at
+  rest, they are gated at the route. Writes are atomic (temp file, `fsync`,
+  rename, `fsync` the directory), because S3 gave that away for free and the
+  database row created straight afterwards claims the file is whole.
+
+  **Upgrading needs the migration first** — `npm run migrate:storage`, see
+  [deployment](docs/deployment.md). The bytes cannot be copied with `cp`: MinIO
+  inlines most objects into their metadata. Nothing here deletes anything, and
+  the old directory stays until you remove it yourself.
+
+  The `verify:upload` assertions that read storage from outside the app moved
+  with it rather than being dropped. They are the ones that would notice if
+  `putModel` or `copyModel` quietly stopped writing, and they caught a path
+  mistake during this very change.
+
+
+- **The Requirements table promised a Pi 5, and never delivered one.** It listed
+  "a NAS, a Pi 5, a VPS, a spare laptop" as hosts. A Pi 5 is arm64, and
+  `ppp-app` and `ppp-migrate` have only ever been published for `linux/amd64` —
+  `release-images.yml` sets no `platforms:`, so buildx quietly built for the
+  runner it happened to be on. An arm64 host has always failed at
+  `docker compose pull`, and nothing said so.
+
+  The row now says amd64 and explains why, rather than naming a board that
+  cannot run it. The previous wording — added alongside the MinIO mirror — blamed
+  that mirror's single architecture, which was wrong in a more interesting way:
+  the mirror was amd64-only, but so were the app images, so MinIO was never the
+  binding constraint. Both statements were made without checking the manifest
+  that would have settled it.
+
+  Building for arm64 is a reasonable thing to want, and it is not what this
+  fixes. A second architecture that the suites never run against is a platform
+  shipped on faith, which is the same mistake as a registry nobody tried
+  anonymously; and running them twice is not a commitment this project makes.
+  Correcting the sentence is the honest half of the fix, and it is the half that
+  costs nobody anything.
+
+
+- **The object store is built from source, runs as uid 1000, and needs one
+  chown to move to.** This is the only upgrade step in this project that is not
+  pull-and-restart, so it is first in the list.
+
+  MinIO withdrew its community distribution while the previous change sat
+  unmerged: Docker Hub 404s, quay.io refuses an anonymous pull, and dl.min.io
+  answers 410 for the server binary *and* for `mc`, on every architecture —
+  which also kills upstream's own release Dockerfile, since it is a downloader.
+  The source is still public and AGPL-3.0, so `docker/minio/Dockerfile` compiles
+  it: the same `RELEASE.2025-09-07T16-13-09Z` the deployment already runs, plus
+  `mc` because the healthcheck is `mc ready local`. Same release means the same
+  on-disk format, so the bytes need no migration.
+
+  The **ownership** does. Building our own image made the scanner able to see
+  what upstream's image had always done — run as root — and rather than record
+  an exception for it, the image now runs as 1000:1000. `/data` is a bind mount,
+  so the host directory decides, and existing model storage is owned by root.
+  Stop the stack, `docker run --rm -v "$DATA_ROOT/models:/data" alpine chown -R
+  1000:1000 /data`, start it again. Skip it and MinIO exits with
+  *"Unable to write to the backend"* rather than starting half-working, which is
+  the right failure. Postgres is untouched.
+
+  Doing it inside a container is not fussiness: the files are root-owned so
+  doing it as yourself fails, and `sudo chown` on a host where your uid is not
+  1000 is how the wrong number gets written. Full instructions in
+  [deployment](docs/deployment.md).
+
+  This also restores arm64. The mirror that unblocked CI was amd64 only because
+  it was copied from a cached image; a source build is not limited that way, and
+  the image is published for `linux/amd64` and `linux/arm64`.
+
+
 - **"Feature requests" in the nav, and it goes to the board.** The owner's nav
   item was labelled *Requests* and pointed at `/frr/queue`, the triage view —
   so the owner's way in was the work list while everyone else's was the board.
@@ -329,7 +812,236 @@ Notable changes. Every entry names a released version; deployments pin
   deployed has to change. Renaming them would break every pinned `PPP_TAG`
   and orphan `v0.1.0` in exchange for tidiness.
 
+### Removed
+
+- **The MinIO furniture, all of it.** `docker/minio/Dockerfile`,
+  `.github/workflows/minio-image.yml`, and the dead `S3_ACCESS_KEY` allowance in
+  the secret scanner. Nothing builds, publishes, signs or scans an object-store
+  image any more, because nothing runs one — which also takes the permanently
+  red `MinIO image` run off `main`.
+
+  What that thread cost, for the record: a mirror after Docker Hub started
+  answering 404, a digest pin, a tag collision that made the pin's two halves
+  name different images, a multi-architecture build from AGPL source, a uid-1000
+  migration, a Trivy exception that was argued for and then not taken, and 63
+  HIGH/CRITICAL advisories that no upgrade could fix because upstream's newest
+  release shipped byte-identical vulnerable dependencies. None of it survives
+  not having an object store.
+
+  **Deliberately kept:** `scripts/export-storage.ts`,
+  `docker-compose.storage-migration.yml` and their documentation. Anyone
+  upgrading from a release that had MinIO still needs to get their models out,
+  and that cannot happen if the tooling left in the same change. The overlay
+  pins the mirror image by digest, so the `ghcr.io/danileau/minio` package has
+  to stay published too — both go a release or two from now, once nobody
+  plausibly has a MinIO data directory left.
+
 ### Fixed
+
+- **An invited address could be registered without its invite link.** The
+  invite gate checked that a pending invitation existed for the address, and
+  Better Auth's sign-up endpoint answers anybody — so while an invitation was
+  open, whoever knew the address could post it with their own password and be
+  given the account and a session, without the link. It now takes both: a
+  pending invitation, and a request that is redeeming that invitation's link.
+  `acceptInvite` checks the token and marks the sign-up as a redemption; the
+  gate refuses everything else, with the same answer an uninvited address gets.
+
+  Two suites had been proving the hole worked. `verify:auth` and
+  `probe:security` each registered an invited address by posting it straight to
+  the endpoint, as a convenient way to test something else, and passed. Those
+  checks now assert the refusal, and `A04-invitelink` / `A04-inviteoracle` are
+  new. Written up as finding 10 in [the security audit](docs/security-audit.md).
+
+  **If you run a deployment:** an account opened this way is indistinguishable
+  afterwards from one opened with the link. If an invitee ever reported that
+  their link said "already accepted" before they had used it, look at that
+  account.
+
+- **The quantity box could not be cleared.** "Or type a number" coerced every
+  keystroke to a quantity, so emptying it snapped straight back to `1` and
+  typing a 3 gave 13 — the only way to enter a number was to select the digit
+  first. The box now keeps what is being typed apart from the quantity: it can
+  be empty mid-edit, a whole number of one or more takes effect as it is typed,
+  and leaving the box with anything else in it falls back to the last quantity.
+  It mattered little while the box started at 1 on a new request, and more once
+  printing a ticket again opened the form with an old quantity to change.
+
+- **Better Auth 1.7.1 → 1.7.7, and the migration that upgrade needs.** The
+  weekly dependency group had been failing `verify` since 2026-09-27 and looked,
+  from the first failing check, like a broken invite gate: sign-up with no
+  pending invitation answered 500 instead of 403. The gate was fine. Better Auth
+  1.7.0–1.7.2 required an `account.issuer` column, and this app added it as
+  `NOT NULL` when it gained passwords; 1.7.3 withdrew the requirement, stopped
+  writing the column, and went back to recognising an account by
+  `(providerId, accountId)`. Against a required column that makes every insert
+  into `account` fail — nobody can be given a password — and the library now
+  checks for exactly that and refuses each request with *"Prisma schema
+  mismatch"*.
+
+  The migration makes `issuer` nullable and moves the unique index back to
+  `(providerId, accountId)`, where it was before. It does **not** drop the
+  column, and that is deliberate: the deploy wizard rolls back to the previous
+  image when a deploy fails its health check, and that image's client still
+  selects `issuer`. Dropping it would turn a failed deploy into a rollback that
+  cannot read an account.
+
+  That claim was tested rather than reasoned, on one database carried across
+  both images. Accounts made under 1.7.1 sign in under 1.7.7. After rolling back
+  onto the migrated database the old migrator finds nothing to do and does not
+  object to a migration it has never heard of, existing accounts sign in, and
+  new ones can be created. The one thing a rollback does not get for free is
+  written into the migration: a password *first set* under 1.7.7 has a NULL
+  issuer, and 1.7.1 answers that account 401 until
+  `UPDATE "account" SET "issuer" = 'local:' || "providerId" WHERE "issuer" IS NULL`
+  is run — which was also tried, and fixes it.
+
+  1.7.7 rather than the 1.7.6 the group proposed, because `@better-auth/passkey`
+  1.7.6 resolves `@better-auth/core` to 1.7.7 while `better-auth` 1.7.6 pins its
+  own 1.7.6, leaving two copies of the core in one process. 1.7.7 also carries a
+  critical fix (GHSA-965c-763c-88jm) for the Magic Link plugin, which this app
+  does not use.
+
+  The rest of the group rides along, none of it needing a code change: `next`
+  15.5.25 → 15.5.26, `react` and `react-dom` 19.0.8 → 19.3.0, `zod` 4.4.3 →
+  4.6.5, `resend` 6.22.0 → 6.29.0, `three` to 0.186, and the development-only
+  `@aws-sdk/client-s3`, `puppeteer-core`, `swagger-ui-dist`, `tsx` and type
+  packages.
+
+- **Two high advisories in `nodemailer`, found by the daily scan.** 9.1.1 →
+  10.0.14, for GHSA-prgh-xp8r-p3m5 and GHSA-v53p-9fqp-m79j: both are quadratic
+  time in the address parser, a denial of service by a crafted address. The
+  scheduled `Security scan` had been red since 2026-09-30, in the repository and
+  in the published `ppp-app` image, and the `trivy` gate would have failed every
+  pull request opened after it.
+
+  The exposure here was small and the bump is not: the only addresses that reach
+  the parser are `MAIL_FROM` and an invitation or reset recipient — typed by the
+  owner, and validated when the invitation was made. But 10 is a major
+  version. It needs Node 20 (the images run 22), and the package was rewritten in
+  TypeScript and now ships from `dist/` with separate ES-module and CommonJS
+  builds — which matters because `nodemailer` is one of the two
+  `serverExternalPackages`, traced into the standalone output rather than
+  bundled. A typecheck cannot see whether that trace still finds the files, so
+  the evidence is `verify:auth` against the built image: an invitation and a
+  reset link both sent through SMTP and read back out of Mailpit.
+
+- **The board and the header at phone width.** A card title long enough to wrap
+  overflowed its card on `/board`, and the shared header did not fit a narrow
+  viewport. Shipped in August and never written down here — found while checking
+  the changelog covered every commit since v0.1.0, which it now does. Reproduced
+  in a headless browser at 360, 390, 430, 768 and 1180 for both roles, before and
+  after.
+
+
+- **Seven places where the documentation would have walked a stranger into a
+  wall.** Found by reviewing the repo against itself rather than reading it.
+
+  - **`scripts/deploy-wizard.sh` health-checked this project's own deployment
+    by default.** `PPP_HEALTH_URL` defaulted to `https://ppp.danileau.com/api/health`,
+    and neither that variable nor `deploy.conf` appears in any `.md` or
+    `.example` file — so somebody else's run printed *our* host as "Live health:
+    healthy", gated its post-swap health loop on it, and could roll back a
+    perfectly good deploy because an unrelated machine blipped. It now derives
+    from `APP_URL` in the same `.env.docker` it already reads the tag from, and
+    refuses to guess if neither that nor `PPP_HEALTH_URL` is set. This is the
+    only script in the repo that changes production.
+  - **The documented bootstrap command errored out as written.** Both
+    `.env.docker.example` and a comment in `docker-compose.prod.yml` gave
+    `docker compose -f docker-compose.prod.yml logs migrate` without
+    `--env-file`, which dies on `required variable DB_PASSWORD is missing`. That
+    is the command that prints the one-use admin link — the single thing a fresh
+    deployment cannot proceed without.
+  - **Quick start handed you a stack you could not sign into.** It said to set
+    `APP_URL` and `PASSKEY_RP_ID` to a public hostname, then to raise the
+    build-and-test stack on `http://localhost:3000`. Better Auth derives its
+    trusted origin and cookie prefix from those, so the browser sent an untrusted
+    origin and threw away a `__Secure-` cookie over plain HTTP. It now says to
+    leave the localhost values until you deploy, and why.
+  - **`PPP_TAG` and `PPP_REGISTRY` were undocumented in the file every user
+    copies**, while the wizard refuses to run without the first and the README
+    calls that file "the full file with commentary".
+  - **Two compose files that have not existed since #18** were still cited in
+    `.env.docker.example` (in the guidance for when `TRUST_PROXY_HEADERS` is
+    safe) and in a source comment. `check:links` cannot catch these: it reads
+    markdown only.
+  - **Three `S3_*` rows and one `S3_SECRET_KEY` in Quick start** outlived the
+    object store by a change, describing variables nothing reads.
+
+
+- **Every build depended on Google answering, and the failure did not say so.**
+  The four faces came from `next/font/google`, which downloads them at build
+  time. So CI's `verify` gate, `release-images.yml` and the README's own
+  build-from-source quick start all needed fonts.googleapis.com reachable and
+  willing — and when it was not, the build died with a webpack stack trace
+  pointing at `@next/font/dist/google/loader.js`, which is nowhere near where
+  anyone would look. Caught by it happening, not by reasoning about it.
+
+  The woff2 files now live in `src/app/fonts/` and load through
+  `next/font/local`. Latin subset, the same faces, 124 kB in total; Archivo is a
+  single variable file covering the four weights it used to fetch separately.
+  Nothing is fetched at build or at runtime, which is also why `font-src` can
+  stay `'self'`.
+
+  It was an inconsistency as much as a fragility: Swagger UI is copied out of
+  `node_modules` at build time precisely because "a CDN would be unreachable on
+  a NAS with no outbound internet", and the app's own typefaces were exempt from
+  that reasoning for no reason anybody had written down.
+
+  Verified by building the image with `fonts.googleapis.com` and
+  `fonts.gstatic.com` pointed at 127.0.0.1 — the build that used to need them
+  now completes without them. All four are SIL OFL 1.1; the licence and the
+  per-family copyright notices travel with the files in
+  `src/app/fonts/README.md`.
+
+
+- **The stack could not be pulled any more, and nothing said so.** MinIO
+  stopped publishing its community image to Docker Hub — `minio/minio` answers
+  404 — and its quay.io repository now refuses an anonymous pull at every tag,
+  so neither registry is a route for CI or for a fresh deployment. A running
+  deployment kept serving from its cached copy, which is what made it quiet: CI
+  could no longer raise the stack, so every pull request's `verify` failed
+  before a single suite ran, and the deploy wizard would have stopped at
+  `compose pull` on the next deploy.
+
+  Both of MinIO's public routes closed in sequence, which is the part worth
+  keeping. quay.io genuinely worked: CI pulled `quay.io/minio/minio`
+  anonymously on 2026-09-16 and brought the stack up healthy. Eleven days later
+  the same tag answers `unauthorized`. So the fix is not a better MinIO
+  registry — the next one closes too — it is holding the bytes ourselves.
+
+  Both compose files now pull the last community release,
+  `RELEASE.2025-09-07T16-13-09Z`, from this project's own registry at
+  `ghcr.io/danileau/minio`, pinned by digest. It is a mirror of exactly what
+  `minio/minio:latest` resolved to, not an upgrade: same release label, and
+  MinIO is AGPL-3.0, so redistributing it is permitted — its source for that
+  release is `minio/minio` at `32d8e52`. Mirroring is what keeps the stack
+  pullable without a credential now that neither upstream registry serves it.
+  The mirror is **`linux/amd64` only**, because that is the platform the
+  original was cached on; an arm64 host — a Pi 5, say — needs its own mirror
+  until a replacement lands.
+
+  MinIO's community edition is no longer maintained, so this keeps the stack
+  deployable rather than current. What replaces it — a maintained fork, Garage,
+  SeaweedFS — is a separate decision with a data migration attached, and is
+  deliberately not made here.
+
+- **Two critical and five high advisories, found by the daily scan.** `next`
+  15.5.23 → 15.5.25 (unauthenticated remote code execution in the image
+  optimiser, which is on by default and which the middleware matcher skips —
+  plus a Windows-only one), `nodemailer` 9.0.5 → 9.1.1, and the `sharp`
+  override ^0.35.3 → ^0.35.4 (libheif).
+
+  Nodemailer's list grew while this sat unmerged, and now runs to four:
+  quadratic address parsing (a denial of service), a `resolveContent()` legacy
+  signature that bypasses `disableFileAccess` / `disableUrlAccess`, and two
+  recipient-domain validation bypasses — an IDN/punycode allow-list escape and
+  an RFC 5322 comment mis-parse — either of which delivers mail to a domain the
+  attacker chose. 9.1.1 covers all four, so the bump did not change; what it
+  fixes did.
+
+  The scheduled `Security scan` had been red since 2026-09-09; patch-level
+  bumps only, so the wider dependabot group stays its own change.
 
 - **Four `verify:frr` checks passed without exercising the rule they named.**
   They posted a bare `FormData` at a page URL carrying nothing but an id. A

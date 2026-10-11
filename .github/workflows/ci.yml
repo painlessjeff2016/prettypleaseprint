@@ -16,9 +16,8 @@
 #   trivy    — filesystem scan; HIGH/CRITICAL fail the run.
 #
 # `verify` deliberately uses docker compose rather than GitHub `services:`.
-# Two reasons: `services:` cannot override a container's command, which MinIO
-# needs, and running the same command a developer runs means the compose files
-# themselves are under test. A broken overlay fails here rather than on the NAS.
+# Running the same command a developer runs means the compose files themselves
+# are under test. A broken overlay fails here rather than on the NAS.
 name: CI
 
 on:
@@ -42,8 +41,8 @@ jobs:
   guard:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
@@ -63,12 +62,25 @@ jobs:
       # once renaming a directory out from under references into it.
       - name: Documentation links
         run: npm run check:links
+      # The wizards are shell, and nothing else in this job executes shell.
+      # Each test file runs its script in a sandbox: a temp directory, stub
+      # executables for docker, gh and curl, and a PATH that holds only those
+      # stubs and a short allow-list — so a test cannot reach the runner's real,
+      # authenticated gh or docker even by mistake. A glob rather than a list,
+      # so a new test file is run the day it is added.
+      - name: Wizard tests
+        run: |
+          for t in scripts/tests/*.test.sh; do
+            echo "::group::$t"
+            bash "$t"
+            echo "::endgroup::"
+          done
 
   models:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
@@ -81,8 +93,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
@@ -98,7 +110,6 @@ jobs:
           {
             echo "BETTER_AUTH_SECRET=$(openssl rand -base64 32)"
             echo "DB_PASSWORD=$(openssl rand -hex 24)"
-            echo "S3_SECRET_KEY=$(openssl rand -hex 24)"
             echo "ADMIN_EMAIL=ci-admin@example.test"
             echo "ADMIN_NAME=Ruben Haas"
           } >> .env.docker
@@ -130,6 +141,12 @@ jobs:
         run: npm run verify:auth
       - name: Upload, board and story
         run: npm run verify:upload
+      # The other way a model arrives. The test overlay switches importing on
+      # and points it at a stand-in for Printables, so this run calls nobody —
+      # and so the far end can be made to redirect, lie about a size, or hand
+      # back a link to another host, which is most of what there is to check.
+      - name: Import from a link
+        run: npm run verify:import
       - name: Admin queue and the status flow
         run: npm run verify:queue
       # The 'frr' feature-request track — the same board/queue/flow mechanics as
@@ -140,6 +157,10 @@ jobs:
       # rendering the list + preferences, and server-side tip validation.
       - name: Benefits, owner-managed
         run: npm run verify:benefits
+      # Owner-managed materials and colours: admin CRUD and ordering, dynamic
+      # upload choices, authoritative validation, and historical snapshots.
+      - name: Materials and colours, owner-managed
+        run: npm run verify:catalog
       # The second front door onto the same operations. Runs against the built
       # image, which is the only place the production CSP is in force — the
       # console's inline-script nonce and its stylesheet-in-a-file are both
@@ -189,7 +210,7 @@ jobs:
   trivy:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Trivy fs scan (HIGH/CRITICAL fail)
         uses: aquasecurity/trivy-action@v0.36.0
         with:

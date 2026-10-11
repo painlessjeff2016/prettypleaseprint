@@ -57,10 +57,15 @@ jobs:
             target: runner
           - name: ppp-migrate
             target: migrator
+          # The one-shot storage migration. Published rather than built on the
+          # host because a deployment has no source tree — see the stage's
+          # comment in the Dockerfile. Goes when the migration tooling goes.
+          - name: ppp-storage-migrate
+            target: storage-migrator
     steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -94,7 +99,7 @@ jobs:
 
       - name: Build and push
         id: push
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           target: ${{ matrix.target }}

@@ -22,7 +22,7 @@ docker run --rm -v "$PWD:/src:ro" semgrep/semgrep semgrep scan \
   --config=p/owasp-top-ten --config=p/security-audit --config=p/nextjs /src/src
 docker run --rm --network host ghcr.io/zaproxy/zaproxy:stable \
   zap-baseline.py -t http://localhost:3000        # DAST
-npm run probe:security                     # DAST, app-specific (103 probes)
+npm run probe:security                     # DAST, app-specific (122 probes)
 ```
 
 ## Result
@@ -93,8 +93,10 @@ worker-src 'self' blob:; manifest-src 'self'; upgrade-insecure-requests
 
 COOP, COEP and CORP were absent. Now `same-origin`, `credentialless` and
 `same-origin` respectively. COEP is `credentialless` rather than
-`require-corp` deliberately — model files will be fetched from object storage
-over signed URLs, and `require-corp` would demand CORP headers on every one.
+`require-corp` deliberately. The reasons given at the time — signed storage
+URLs and a third-party font host — have both since gone: models are streamed by
+the app and the fonts are vendored. `require-corp` is now reachable and is left
+for a change of its own; `next.config.ts` says why.
 
 ### 4. Six dependency advisories — *high, fixed*
 
@@ -136,6 +138,116 @@ answer to the wrong audience is how auth bugs hide.
 A build artifact would have been committed. Found indirectly: Semgrep's only
 hit was a false positive *inside* that generated file.
 
+### 8. Open redirect via a backslash — *moderate, fixed*
+
+`safeNext` on the sign-in and re-auth pages, and the `from` guards in the two
+server-action helpers, all asked the same question the same way:
+
+```ts
+raw.startsWith("/") && !raw.startsWith("//")
+```
+
+`/\evil.example` answers yes to both halves. The WHATWG URL parser treats `\`
+as `/` in the relative-slash state, so the browser resolved it to
+`https://evil.example/`; `/\/` and `/\\` did the same. The value was handed to
+`window.location.assign` after a **successful** sign-in, so the victim
+authenticated on the real origin, with the real passkey, and was then delivered
+to a lookalike — which is the whole shape of the attack the code comment already
+warned about.
+
+`/reauth` was the worse of the two. That page exists to be the "confirm it's
+you" moment before access changes hands, so it is the page a person is least
+likely to re-read the address bar on.
+
+The fix is one helper, `src/lib/safe-redirect.ts`, used by all four call sites.
+It resolves the target against an origin that cannot exist and keeps it only if
+it stayed there. The point is not that backslashes are now also rejected — it is
+that prefix matching cannot answer the question, because the question is what a
+URL parser will do, so the check asks one.
+
+Caught by review, not by the suite: `A07-protorel` tested `//evil.example`
+only, and the bug sat directly behind the one case a person thinks of.
+`A07-offsite-signin` and `A07-offsite-reauth` now assert the parser's five
+spellings against both pages.
+
+### 9. The admin plugin's HTTP surface was open — *moderate, fixed*
+
+`admin()` is enabled in `src/lib/auth.ts` for what it adds to the schema and to
+sign-in — the `role` and `banned` fields, and the refusal to create a session for
+a suspended account. It also mounts a dozen endpoints under
+`/api/auth/admin/`, and this app uses none of them: every admin screen goes
+through Prisma directly, and `authClient.admin` is never called from the browser.
+
+Measured with an admin session before closing them, which is worth recording
+because the first assessment of this was wrong. Most of the surface already
+refused: `set-user-password`, `remove-user`, `ban-user`, `update-user`,
+`list-user-sessions` and `revoke-user-sessions` all answered **403** from Better
+Auth's own permission statements, and `create-user` answered 403 from this app's
+invite hook — confirming the invite gate holds even against the plugin's own
+back door. Two did not:
+
+| endpoint | with an admin cookie |
+| --- | --- |
+| `impersonate-user` | **200**, with a session token for another account |
+| `list-users` | **200**, with every account's name, e-mail and verified flag |
+
+`set-role` answered 500, which is an unhandled path rather than a refusal.
+
+The impersonation is not theoretical. The probe that called it had its own
+browser become the impersonated user, and the next check found `/admin/invites`
+rendering an error page because the caller was no longer an admin. This is the
+primitive that recovery deliberately stopped using — the "Closed since the first
+pass" section below says `access.reissued` "is gone", and the capability was
+still mounted.
+
+Closed as a whole prefix rather than as two paths, because the 403s are not this
+app's doing. They come from the plugin's default permission statements, so they
+can widen on a version bump with nothing in this repository changing — and a new
+endpoint in a future release is then closed by default instead of newly exposed.
+404, not 403, so the paths do not confirm their own existence.
+
+Twenty probes assert it, for an admin as well as a client. The previous probes
+here asserted 401/403 for a client only, and had to be changed by this fix, which
+is the honest signal that behaviour changed rather than an assertion being
+widened to fit.
+
+### 10. An invited address could be registered without its link — *high, fixed*
+
+The invite gate asked one question: is there a pending invitation for this
+address. Better Auth's `POST /api/auth/sign-up/email` is reachable by anyone,
+and the invite page was only ever one caller of it. So for the seven days an
+invitation was open, anybody who knew or guessed the invited address could post
+it to that endpoint with a password of their own and receive the account and a
+session. The token in the link — the only thing that proves the mailbox —
+took no part. `emailVerified` was then stamped true "by construction".
+
+What it gave: a client account under somebody else's address, and the real
+invitee locked out of an invitation already marked accepted. Not the admin
+role; invitations are client-role and the single-admin index holds regardless.
+
+Found by reading the gate while planning single sign-on, which would have
+leaned on the same address-only rule, and confirmed against a running instance
+before anything was changed: a control address with no invitation got 403, an
+invited one got a session.
+
+It survived because the suites encoded it. `verify:auth` registered "Bob" by
+posting his invited address straight to the endpoint to prove that privileged
+fields are stamped from the invite, and `probe:security` did the same for
+`A08-massassign`. Both passed, and both were demonstrations of the hole. The
+only gate probe, `A04-invitegate`, used an address with no invitation at all.
+
+Fixed in the gate rather than by hiding the route. An account is opened only
+by a request that is redeeming a checked invite link: `acceptInvite` verifies
+the token and runs the sign-up inside `claimingInvite`, and the gate refuses
+anything outside it. Closing the route in middleware would also have worked,
+and would have lost two things — the refusal in the audit trail, which is how
+somebody trying invited addresses becomes visible, and the rule living in the
+one hook every method goes through. Both refusals answer identically, so the
+endpoint is not a way to ask who has been invited.
+
+Probed as `A04-invitelink` and `A04-inviteoracle`, and in `verify:auth`
+section 2b.
+
 ## Findings correctly dismissed
 
 - **Semgrep "Facebook OAuth detected"** in `tsconfig.tsbuildinfo` — a regex
@@ -156,13 +268,13 @@ hit was a false positive *inside* that generated file.
 | **A01** | Broken Access Control | **Pass.** Client refused on the admin page (404, not 403 — a 403 confirms existence) and on all six admin-plugin endpoints (`list-users`, `set-role`, `create-user`, `impersonate-user`, `remove-user`, `list-user-sessions`). Role unchanged after escalation attempts; no back-door account. `storyScope` hides another client's story. A forged session cookie reaches nothing. The JSON API is probed as a second front door onto the same operations: a client is refused `advance`, `decline`, `flag` and `clear-flag` (403, and the ticket does not move); another client's ticket, thread and model are each 404 rather than 403; and the printer owner — the widest scope in the app — still cannot withdraw somebody else's request. The feature-request track ('frr') is the same authorisation model on its own tables: `featureScope` hides another client's request (404, not 403), `/frr/queue` is owner-only, and the owner cannot withdraw a request that is not theirs — all exercised by `verify:frr`. The later filter bars on `/frr` and the `/history` view of finished prints are scoped the same way: the filters are ANDed onto `featureScope`/`storyScope`, so they can only narrow a caller's own set, never widen it. |
 | **A02** | Cryptographic Failures | **Pass.** Session cookie `HttpOnly`, `SameSite=Lax`, `Secure`, `__Secure-` prefixed. Invite tokens stored as SHA-256 only; set-password tokens hashed at rest (`verification.storeIdentifier: "hashed"`) — both verified against the live database. Passwords are stored as Better Auth's scrypt digest, asserted against the live `account` row rather than assumed. |
 | **A03** | Injection | **Pass.** SQL metacharacters in the username field handled (Prisma parameterises); no 5xx, table intact. Stored XSS via display name escaped in both DOM and flight payload. Reflected XSS via `?error=` and via the invite-token path segment both escaped. CRLF in the email field does not reach the mailer. Uploads are validated against their bytes, not their filename — a PDF, an ELF binary and an HTML page renamed `.stl` are all refused, as is an STL that lies about its triangle count. |
-| **A04** | Insecure Design | **Pass.** No public registration route: `/signup` and `/register` do not exist, and the sign-up endpoint that *does* exist — the one an invitation link posts to — answers 403 to anybody without a pending invite, leaving no row. Invite-only enforced in one hook across every auth method. Invites single-use, expiring, revocable, rotated on resend. Password guessing rate-limited and confirmed firing. |
+| **A04** | Insecure Design | **Pass.** No public registration route: `/signup` and `/register` do not exist, and the sign-up endpoint that *does* exist — the one an invitation link posts to — answers 403 to anybody without a pending invite, and to anybody with one who is not redeeming its link (finding 10), leaving no row. Invite-only enforced in one hook across every auth method. Invites single-use, expiring, revocable, rotated on resend. Password guessing rate-limited and confirmed firing. |
 | **A05** | Security Misconfiguration | **Pass, after fixes 2 and 3.** Full header set; `X-Powered-By` suppressed; `.env`, `.git/config`, `package.json` and the Prisma schema all unreachable; malformed input returns no stack trace. A write to the API carrying a foreign `Origin` is refused. Neither `/api/openapi.json` nor the console at `/docs` is served to a stranger, and the console loads no subresource from another origin — Swagger UI is vendored into `public/` at build time rather than pulled from a CDN, so the CSP needed no relaxation. |
 | **A06** | Vulnerable Components | **Pass, after fixes 4 and 5.** Zero across three independent scanners. |
-| **A07** | Auth Failures | **Pass, after fix 1.** Passwords: ≥10 characters, breach-checked against HIBP by k-anonymity, guessing capped at 10/min per IP. No user enumeration — a wrong password and an invented username give byte-identical responses, and an unknown username still pays for a hash so the wall clock does not answer either. Set-password links single-use, 30-minute TTL, hashed at rest, and they establish **no session**. Setting a password revokes the sessions the old one opened. Off-site and protocol-relative redirect targets refused, both via `?next=` and via the API's `callbackURL`. Sign-out kills the session server-side. A bearer token is the session token rather than a separate credential: an invented one grants nothing, and sign-out revokes the token at the same instant it revokes the cookie — probed, because a token that outlived sign-out would be a way back into an account whose owner believes they have left. See the section below. |
+| **A07** | Auth Failures | **Pass, after fix 1.** Passwords: ≥10 characters, breach-checked against HIBP by k-anonymity, guessing capped at 10/min per IP. No user enumeration — a wrong password and an invented username give byte-identical responses, and an unknown username still pays for a hash so the wall clock does not answer either. Set-password links single-use, 30-minute TTL, hashed at rest, and they establish **no session**. Setting a password revokes the sessions the old one opened. Off-site redirect targets refused, both via `?next=` and via the API's `callbackURL` — decided by resolving the target against a sentinel origin rather than by matching its prefix, because `/\evil.example` passes “starts with / and not //” and then resolves off-site. That is fix 8 below. Sign-out kills the session server-side. A bearer token is the session token rather than a separate credential: an invented one grants nothing, and sign-out revokes the token at the same instant it revokes the cookie — probed, because a token that outlived sign-out would be a way back into an account whose owner believes they have left. See the section below. |
 | **A08** | Integrity Failures | **Pass.** `role`, `initials` and `invitedById` cannot be set from the request body: declared `input: false`, and Better Auth refuses the whole sign-up with `FIELD_NOT_ALLOWED` rather than silently trimming it. A chosen `id` and a posted `emailVerified` reach the endpoint undeclared and are overruled server-side from the invite. Both halves probed. On upload, `uploaderId` comes from the session and a posted `status` is ignored, both probed. Storage keys are generated, never derived from the filename. Lockfile committed. |
 | **A09** | Logging & Monitoring | **Pass.** An append-only `AuditEvent` table records invitations sent, resent, revoked, accepted and *rejected*; access revoked and restored; password resets requested and completed; sign-in and sign-out; story creation and refused uploads. The client address is recorded only from a header the deployment has explicitly named as trustworthy (`TRUST_PROXY_HEADERS`), and no address at all otherwise — a blank rather than a fiction. Rows are denormalised (`actorEmail`, `subject`) so the trail still reads correctly after the user or story it refers to is deleted, and a probe asserts no token or secret reaches `detail`. |
-| **A10** | SSRF | **Pass (low exposure).** The app makes no outbound request from user input. A link-local `callbackURL` (`169.254.169.254`) is refused. |
+| **A10** | SSRF | **Pass.** A link-local `callbackURL` (`169.254.169.254`) is refused. One feature makes an outbound request because a requester asked — importing a model from a link, off by default — and the requester never chooses its address: see [Importing from a link](#importing-from-a-link). |
 
 ## A07 with passwords in the picture
 
@@ -309,15 +421,18 @@ is the one control on the list a copied cookie cannot satisfy: the thief has
 the session, not the passkey and not the password.
 
 `revokeInvite` is deliberately **not** gated — withdrawing an unaccepted invite
-only ever removes reach — and neither is `/admin/benefits`, which decides what
-tips the upload form offers and grants nobody anything.
+only ever removes reach — and neither are `/admin/benefits` and
+`/admin/catalog`, which decide what tips, materials and colours the upload form
+offers and grant nobody anything.
 
 Two implementation notes, both of which look odd on purpose:
 
 - **Freshness is the age of the session itself**, not a separate marker. Better
-  Auth 1.7.1 has no "prove it is you" primitive: `/passkey/verify-authentication`
-  and `/sign-in/username` both mint a *new* session rather than annotating the
-  one you hold. So re-authenticating means signing in again, and a session
+  Auth has no way to mark the session you hold as re-proven (true at 1.7.1 when
+  this was built, and still at 1.7.7): `/passkey/verify-authentication` and
+  `/sign-in/username` both mint a *new* session rather than annotating the one
+  you hold. A server-side `verifyPassword` exists, but it only answers yes or
+  no, has no passkey counterpart, and leaves nothing on the session. So re-authenticating means signing in again, and a session
   created moments ago is the evidence. A normal sign-in is therefore fresh for
   its first five minutes, which is correct — somebody who just typed their
   password should not be asked for it twice.
@@ -456,6 +571,46 @@ archive Postgres refuses to start from. On ZFS a snapshot sidesteps this
 entirely; elsewhere the copy has to be made from inside a container, which the
 README now says.
 
+## Importing from a link
+
+Added after the audit above, and the first thing in the app that makes a
+request to another server on a requester's say-so. It is off unless
+`IMPORT_SOURCES` names a source. What follows is what it was built to refuse.
+Every row but the last is asserted by `npm run verify:import`, and the four
+that are new code rather than reuse — the link parse, the download origin and
+redirect, the size cut-off, and the stored link — were each watched failing
+with the guard removed before the check was believed.
+
+| The risk | What stops it |
+| --- | --- |
+| A pasted link makes the server request an address of the requester's choosing — an internal service, the metadata endpoint, `localhost` | The link is never fetched. It is parsed for a numeric model id, compared against the Printables hostnames *as a parsed host*, and discarded. Twenty-one look-alike links are refused with no outbound request made at all. |
+| The far end names somewhere else to connect to | The download link is fetched only on the one file origin, compared after parsing; redirects are an error rather than followed. A stand-in serving a perfectly good model from a second origin is never connected to. |
+| The far end sends something other than a model | The bytes go through the same `inspectModel` an upload does. A web page named `.stl` is `422`, recorded as `upload.rejected` with its source, and nothing is stored. |
+| The far end sends more than it said | The download is cut off at the listed size, which is already held to the upload cap — with or without a `Content-Length` admitting it. |
+| A client names a file from a different model, or lies about its size | The listing is re-fetched server-side at import time. The client supplies two ids and nothing else is taken from it. |
+| A cross-site page drives it with a signed-in person's cookie | Both endpoints are `POST` and sit behind the same Origin check as every write — including the listing, which changes nothing but does make the server call out. |
+| The stored link becomes a `javascript:` URL on a ticket | `sourceUrl` is built from the API's id and slug, never from input, and is validated again on the way out. A hostile value written straight into the column renders as nothing. |
+| Memory | An import takes one of the same two slots an upload does, and fills one pre-sized buffer rather than joining chunks. |
+
+**Accepted, and worth knowing:**
+
+- **The API is undocumented.** It is the endpoint the Printables website uses,
+  not a published contract. The response is parsed against a schema and a
+  mismatch fails by name. That bounds the damage of a change to "importing
+  stops, with a sentence saying why"; it does not make the dependency stable.
+- **No per-person rate limit on listing.** A signed-in colleague could make the
+  server ask Printables about models in a loop. Everyone who can sign in was
+  invited, each request is a few kilobytes, and the slot gate bounds the
+  expensive half. Revisit if the group grows.
+- **`IMPORT_PRINTABLES_BASE` moves the allowlist.** It points the importer at a
+  stand-in so the suite can run without calling Printables, and with it set the
+  stand-in is the *only* host the importer talks to. It is operator
+  environment, unreachable from any request, and should never be set in a
+  deployment — but it is a knob that exists, and this is where that is written
+  down.
+- **DNS is trusted.** The allowlist is hostnames, not addresses. Someone who
+  can answer DNS for `printables.com` on your network can already do worse.
+
 ## Open items
 
 - **Nothing alerts automatically.** `/admin/audit` surfaces refusals but
@@ -465,8 +620,8 @@ README now says.
 - **No authenticated active scan.** ZAP ran a passive baseline against the
   unauthenticated surface. The authenticated surface is covered by the 91
   custom probes instead, which is better for authorisation logic and worse for
-  generic injection classes. Once the board and upload screens land, an
-  authenticated ZAP active scan is worth configuring.
+  generic injection classes. The board and upload screens have long since
+  landed, so an authenticated ZAP active scan is worth configuring.
 - **CSP verified against served markup, not a live browser** — except at
   `/docs`, which was. Building the API console forced the issue: its stylesheet
   had to move out of an inline `<style>` block and into a file, because
@@ -474,11 +629,10 @@ README now says.
   than failing. That is the failure mode this item is about — a policy
   violation that looks like a design bug. The rest of the app still deserves
   the same browser check.
-- **Signed model URLs are minted but nothing serves them yet.**
-  `signedModelUrl` exists with a 10-minute expiry and the ownership check
-  gates it, but the download route lands with the 3D viewer. When it does,
-  `connect-src` has to widen to the storage origin — it is `'self'` today,
-  which will block the fetch.
+- ~~Signed model URLs are minted but nothing serves them yet~~ — closed by
+  removal. There is no storage service and no signed URL: `/api/models/[id]`
+  streams the file from disk behind the ownership check, and `connect-src`
+  stays `'self'`.
 - **The upload buffers the whole file in memory**, and now at a 250 MB cap
   rather than 50 MB. The buffering is not the validator's doing —
   `request.formData()` has already read the whole body before the route handler

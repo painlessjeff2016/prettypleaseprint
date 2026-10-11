@@ -168,6 +168,34 @@ const asc = inspectModel("hook.stl", asciiStl(120, 18, 12));
 check("ASCII STL accepted", asc.ok, why(asc));
 check("ASCII STL dimensions match the mesh", ok(asc)?.dims === "120 × 18 × 12 mm", ok(asc)?.dims);
 
+// Wavefront OBJ regression tests — custom PPP functionality.
+const objBytes = new TextEncoder().encode([
+  "# Simple triangular mesh",
+  "v 0 0 0",
+  "v 40 0 0",
+  "v 0 25 0",
+  "v 0 0 15",
+  "f 1 2 3",
+  "f 1 2 4",
+  "f 1 3 4",
+  "f 2 3 4",
+  "",
+].join("\n"));
+
+const obj = inspectModel("bracket.obj", objBytes);
+check("OBJ accepted", obj.ok, why(obj));
+check("OBJ dimensions match the mesh",
+      ok(obj)?.dims === "40 × 25 × 15 mm", ok(obj)?.dims);
+check("OBJ triangle count is right",
+      ok(obj)?.triangles === 4, String(ok(obj)?.triangles));
+
+const invalidObj = inspectModel(
+  "fake.obj",
+  new TextEncoder().encode("This is not a Wavefront OBJ model.")
+);
+check("invalid OBJ is refused",
+      !invalidObj.ok && invalidObj.reason === "not_a_model", why(invalidObj));
+
 const mf = inspectModel("sign.3mf", threeMf(160, 60, 8));
 check("3MF accepted", mf.ok, why(mf));
 check("3MF dimensions match the mesh", ok(mf)?.dims === "160 × 60 × 8 mm", ok(mf)?.dims);

@@ -4,11 +4,12 @@ import { db } from "@/lib/db";
 import { nextStatus, storyRef } from "@/lib/scope";
 import { printerName, requireAdmin } from "@/lib/authz";
 import { formatBytes } from "@/lib/models";
-import { quantityText, relativeTime } from "@/lib/catalog";
+import { PRIORITY_RANK, quantityText, relativeTime } from "@/lib/catalog";
 import { AppHeader } from "@/components/app-header";
 import { AdminActions } from "@/components/admin-actions";
-import { Kicker, Notice, StatusChip } from "@/components/ui";
+import { Kicker, Notice, StatusChip, PriorityChip } from "@/components/ui";
 import { Toast } from "@/components/toast";
+import { ColorSwatch } from "@/components/color-swatch";
 
 export const dynamic = "force-dynamic";
 
@@ -37,7 +38,12 @@ export default async function QueuePage({
     include: { uploader: { select: { name: true, initials: true } } },
   });
 
-  const waiting = stories.filter((s) => s.status === "Requested");
+  // High first, then oldest first within a priority — the query is already
+  // oldest-first and the sort is stable. The same order the feature-request
+  // queue reads in.
+  const waiting = stories
+    .filter((s) => s.status === "Requested")
+    .sort((a, b) => (PRIORITY_RANK[a.priority] ?? 1) - (PRIORITY_RANK[b.priority] ?? 1));
   const working = stories.filter(
     (s) => s.status !== "Requested" && s.status !== "Declined",
   );
@@ -76,8 +82,9 @@ export default async function QueuePage({
                   className="flex flex-wrap items-start gap-[17.6px] rounded-card border-[3px] border-ink bg-porcelain p-[15px]"
                 >
                   <div className="min-w-[220px] flex-[1_1_280px]">
-                    <p className="m-0 font-mono text-[11.5px] font-bold tracking-[0.06em] text-ink-3">
-                      {storyRef(story.id)} · {story.filename} · {formatBytes(story.fileSize)}
+                    <p className="m-0 flex flex-wrap items-center gap-[8px] font-mono text-[11.5px] font-bold tracking-[0.06em] text-ink-3">
+                      <PriorityChip priority={story.priority} />
+                      <span>{storyRef(story.id)} · {story.filename} · {formatBytes(story.fileSize)}</span>
                     </p>
                     <Link
                       href={`/story/${story.id}`}
@@ -124,10 +131,10 @@ export default async function QueuePage({
                   i < working.length - 1 ? "border-b-2 border-dashed border-rule" : ""
                 }`}
               >
-                <span
-                  aria-hidden
+                <ColorSwatch
+                  mode={story.colorMode}
+                  style={story.colorStyle ?? story.colorHex}
                   className="h-[40px] w-[40px] flex-none rounded-full border-[3px] border-ink"
-                  style={{ background: story.colorHex }}
                 />
                 <div className="min-w-[180px] flex-[1_1_240px]">
                   <Link

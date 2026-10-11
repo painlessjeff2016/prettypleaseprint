@@ -31,8 +31,15 @@ that: there is no multi-tenancy, no billing, and no queue theory.
   existence without a pending invitation, enforced in a single hook that every
   authentication method goes through.
 - **Upload a model** — `.stl` or `.3mf`, validated against its actual bytes
-  rather than its filename, measured for its bounding box, stored in object
-  storage and never in the web root.
+  rather than its filename, measured for its bounding box, stored on disk
+  and never in the web root.
+- **Or paste a link instead** — where the printer owner has switched it on, a
+  request can start from a [Printables](https://www.printables.com) link: the
+  app lists the model's `.stl` and `.3mf` files, you pick one, and the server
+  fetches it. It is then held to exactly what an upload is, and the ticket
+  links back to the model's page. Off by default, because it makes the server
+  call somebody else's — see
+  [Importing from a link](docs/deployment.md#importing-from-a-link).
 - **Follow it on a board** — Requested → Accepted → Printing → Delivery, one
   step at a time, forwards only. Or Declined, with a reason. Marking it **Done**
   takes it off the board while keeping it in *My orders*, so the rail carries
@@ -41,10 +48,19 @@ that: there is no multi-tenancy, no billing, and no queue theory.
   is Requested, Accepted or Declined, but not once it is Printing. The ticket,
   the conversation and the uploaded file go with it. Plans change; unwanted
   prints waste filament.
-- **Print an old request again** — re-queue any past ticket of yours (a test
-  print that worked, a declined one you have fixed) as a fresh request, without
-  hunting down and re-uploading the file. The model is copied server-side, so
-  the two tickets own independent files.
+- **Print an old request again, differently if you like** — re-queue any past
+  ticket of yours (a test print that worked, a declined one you have fixed) as
+  a fresh request, without hunting down and re-uploading the file. It opens the
+  request form filled in with what you asked for last time, so the material,
+  colour, quantity and print settings can change before it is sent. The model
+  is copied server-side, so the two tickets own independent files.
+- **See what each person has sent** — the printer owner picks one person or
+  several at `/admin/prints` and gets everything they have uploaded, in any
+  state. Each member on the guest list links straight to theirs.
+- **Say how much it matters** — a request carries a priority (low, medium,
+  high). The printer owner's queue lists the urgent ones first, and the
+  requester or the owner can change it on the ticket while it is still on the
+  rail. It orders the queue; it does not book the printer.
 - **Note print settings** — an optional free-text field on a request for the
   slicer specifics that come with some files (layer height, infill, supports,
   temperatures). The printer owner sees them on the ticket, so they do not
@@ -59,6 +75,11 @@ that: there is no multi-tenancy, no billing, and no queue theory.
   owner's to define at `/admin/benefits`, and the ones they mark *preferred* are
   starred on the upload form so people know what the owner actually wants. Editing
   or retiring a benefit never rewrites a past request's tip.
+- **Owner-managed materials and colours** — the printer owner decides what is
+  currently on the shelf at `/admin/catalog`, including display order, solid
+  or gradient swatches, and a rainbow “whatever” option. Turning off, renaming,
+  or removing an entry changes future requests without rewriting old tickets.
+  See **[Materials and colours](docs/material-catalog.md)**.
 - **Revoke access when someone leaves** — suspends the account, signs them out
   everywhere and refuses new sign-ins, while keeping their tickets, comments
   and history. Reversible, and audited.
@@ -91,8 +112,8 @@ that: there is no multi-tenancy, no billing, and no queue theory.
 
 | | |
 | --- | --- |
-| Host | anything that runs Docker Compose — a NAS, a Pi 5, a VPS, a spare laptop |
-| Memory | ~1 GB for the whole stack (app, Postgres, MinIO) |
+| Host | anything that runs Docker Compose on **`linux/amd64`** — a NAS, an x86 VPS, a spare laptop. **Not arm64.** The published `ppp-app` and `ppp-migrate` images are built for amd64 only, and a second architecture would have to be verified rather than merely built — the suites are this project's contract, and running them twice is not a commitment it makes. An arm64 host (a Pi 5, an Ampere VPS, an Apple Silicon Mac) fails at `docker compose pull` with `no matching manifest for linux/arm64`. |
+| Memory | ~1 GB for the whole stack (app, Postgres) |
 | Disk | small — the database is megabytes; uploads are capped at 250 MB each |
 | TLS | **required.** The app refuses to start on plain `http://` in production, and passkeys need a secure context |
 | Mail | **optional.** Nothing needs it — see [Mail is optional](docs/authentication.md#mail-is-optional--genuinely) |
@@ -104,18 +125,22 @@ git clone https://github.com/danileau/prettypleaseprint.git && cd prettypleasepr
 cp .env.docker.example .env.docker
 ```
 
-Edit `.env.docker` — at minimum generate the three secrets and set your
-hostname and admin:
+Edit `.env.docker` — generate the two secrets and say who the admin is:
 
 ```bash
 BETTER_AUTH_SECRET="$(openssl rand -base64 32)"
 DB_PASSWORD="$(openssl rand -hex 24)"
-S3_SECRET_KEY="$(openssl rand -hex 24)"
-APP_URL="https://print.example.org"
-PASSKEY_RP_ID="print.example.org"
 ADMIN_EMAIL="you@example.org"
 ADMIN_NAME="Your Name"
 ```
+
+**Leave `APP_URL` and `PASSKEY_RP_ID` at the example's localhost values for
+now.** They are what Better Auth derives cookie scope and the WebAuthn relying
+party from, so setting them to a public hostname and then running on
+`http://localhost:3000` gives you a stack you cannot sign into: the browser
+sends an origin the app does not trust, and receives a `__Secure-` cookie it
+discards over plain HTTP. Set them when you deploy — see
+**[docs/deployment.md](docs/deployment.md)**.
 
 Then bring it up. This build-from-source variant publishes ports and catches
 mail locally, which is what you want for a first look:
@@ -150,9 +175,6 @@ with commentary is [`.env.docker.example`](.env.docker.example).
 | --- | --- | --- |
 | `BETTER_AUTH_SECRET` | **yes** | Signs session cookies. `openssl rand -base64 32`. Losing it invalidates every session. |
 | `DB_PASSWORD` | **yes** | Postgres password. Baked into the data directory on first start — see [Restore](#restore). |
-| `S3_SECRET_KEY` | **yes** | MinIO root password. |
-| `S3_ACCESS_KEY` | | MinIO root user. Default `ppp`. |
-| `S3_BUCKET` | | Default `ppp-models`. |
 | `APP_URL` | **yes** | The origin the browser sees, including scheme. Cookies, invitation links and the WebAuthn relying party derive from it. Must be `https://` in production. |
 | `PASSKEY_RP_ID` | **yes** | Registrable domain, no scheme or port. **Permanent** — changing it kills every enrolled passkey. |
 | `PASSKEY_RP_NAME` | | Shown in the browser's passkey prompt. |
@@ -163,8 +185,10 @@ with commentary is [`.env.docker.example`](.env.docker.example).
 | `MAIL_FROM` | | Envelope sender. |
 | `TRUST_PROXY_HEADERS` | | Which header carries the client address: `false` (trust nothing, the default), `true` (left-most `X-Forwarded-For`), or `cloudflare` (`CF-Connecting-IP`). See [the reasoning](docs/deployment.md#why-trust_proxy_headers-is-a-separate-switch). |
 | `HIBP_DISABLED` | | `true` disables the breach check. Only for a host with no outbound internet — it fails closed, so without it nobody could register. |
+| `IMPORT_SOURCES` | | `printables` lets a request start from a Printables link instead of an upload. **Off when unset.** Needs outbound HTTPS, and a misspelt value stops the app. See [Importing from a link](docs/deployment.md#importing-from-a-link). |
 | `SOURCE_URL` | | Where this instance's source lives, shown in the footer. **Change it if you modify the code** — see [Licence](#licence). Defaults to the upstream repository. |
-| `PPP_REGISTRY` / `PPP_TAG` | | Which published image to run. Pin `PPP_TAG` to a release (`v0.1.0`) or a commit SHA; either is also how you roll back. |
+| `PPP_REGISTRY` / `PPP_TAG` | | Which published image to run. Pin `PPP_TAG` to a release (`v0.3.0`) or a commit SHA; either is also how you roll back. |
+| `CF_TUNNEL_TOKEN` | | Connector token for `docker-compose.tunnel.yml`, from Cloudflare Zero Trust. A credential: anything holding it can serve the hostnames routed to that tunnel. See [Deploying behind a Cloudflare Tunnel](docs/deployment.md#deploying-behind-a-cloudflare-tunnel). |
 
 ## Deploying
 
@@ -175,6 +199,12 @@ The short version: pull a published image, put a reverse proxy in front, point
 docker compose --env-file .env.docker \
   -f docker-compose.prod.yml -f docker-compose.proxy.yml up -d
 ```
+
+On a connection whose public address is not yours to keep — a dynamic one, or
+none at all — `docker-compose.tunnel.yml` replaces the reverse proxy with a
+Cloudflare Tunnel connector that dials *outward*, so there is no port to
+forward and no `A` record to keep current. See
+[Deploying behind a Cloudflare Tunnel](docs/deployment.md#deploying-behind-a-cloudflare-tunnel).
 
 `docker-compose.prod.yml` **consumes** images rather than building them, so a
 deployment needs no source tree and no toolchain, and what runs there is
@@ -198,9 +228,16 @@ That token is optional, is never stored, and is only needed because GitHub
 gates the package *listing* API even for public packages.
 
 `scripts/deploy-wizard.sh` is the way to move between versions: it lists what is
-published, cosign-verifies before swapping, health-checks after, and rolls back
-on its own if the new image does not come good. See
-**[docs/deployment.md](docs/deployment.md)**.
+published, shows the upgrade notes of every release you are about to cross and
+asks whether you have read them, cosign-verifies before swapping, health-checks
+after, and rolls back on its own if the new image does not come good. It is a
+single file you copy onto the host — copy it again when you upgrade, since it
+does not update itself. See **[docs/deployment.md](docs/deployment.md)**.
+
+Releases themselves are cut with `scripts/release-wizard.sh`, from a checkout:
+changelog, version, full local test, pull request, tag, images, GitHub release,
+with a question before each step that cannot be undone. See
+**[Cutting a release](docs/development.md#cutting-a-release)**.
 
 ## Backup and restore
 
@@ -211,7 +248,8 @@ Everything that matters is under `DATA_ROOT` plus one file:
 | | |
 | --- | --- |
 | `$DATA_ROOT/db/` | Postgres — accounts, tickets, comments, the audit trail |
-| `$DATA_ROOT/models/` | the uploaded `.stl` / `.3mf` files |
+| `$DATA_ROOT/uploads/` | the uploaded `.stl` / `.3mf` files, as plain files |
+| `$DATA_ROOT/models/` | **only if you have not migrated yet** — the old object store's data directory. Plain `tar` cannot read it usefully; see [Deployment](docs/deployment.md). |
 | `.env.docker` | the secrets. **Not** under `DATA_ROOT`, and not in the repo. |
 
 On ZFS, one recursive snapshot of the parent dataset captures all three:
@@ -314,7 +352,7 @@ The published images are public, so this should not happen — check the tag
 exists before assuming it is an auth problem:
 
 ```bash
-docker manifest inspect ghcr.io/danileau/ppp-app:v0.1.0
+docker manifest inspect ghcr.io/danileau/ppp-app:v0.3.0
 ```
 
 On a **fork** with private packages you do need a credential, and it must be a
@@ -341,6 +379,17 @@ curl -sS -D - "http://your.host.example/.well-known/acme-challenge/probe" | head
 Behind Cloudflare's proxy, visitors see Cloudflare's certificate regardless, so
 an **Origin Certificate** plus SSL mode *Full (strict)* removes ACME from the
 picture entirely.
+
+**Every page loads and nothing works — sign-in included.**
+Cloudflare's **Rocket Loader** rewrites every `<script>` to load through its own
+deferred loader, and the rewritten tags do not carry the per-request CSP nonce
+this app's `script-src` requires. Hydration never happens, so no client-side code
+runs: the pages render from server HTML and look perfectly normal, but the
+sign-in form, the upload progress bar, the 3D viewer and the Activity menu all do
+nothing. The console shows CSP violations; the app's own logs show nothing at
+all, because the requests never reach it. Turn Rocket Loader off, globally or
+with a Configuration Rule scoped to the hostname — see
+[deployment](docs/deployment.md). Auto Minify and Brotli are fine.
 
 **Audit rows have no IP address.**
 `TRUST_PROXY_HEADERS` is unset or `false`, so nothing is trusted. Behind
@@ -369,13 +418,14 @@ has no outbound internet, set `HIBP_DISABLED=true` — and only then.
 | **[Authentication](docs/authentication.md)** | invite-only registration, passwords, passkeys, resets, and why each decision went the way it did |
 | **[Architecture](docs/architecture.md)** | the viewer, upload validation, decisions taken against the design handoff, and the file layout |
 | **[Deployment](docs/deployment.md)** | containers, reverse proxies, the deploy wizard, TLS, first run |
+| **[Materials and colours](docs/material-catalog.md)** | the owner-managed catalogue behind the request form |
 | **[Feature requests](docs/feature-requests.md)** | the `/frr` track — file a request, triage it exactly like the print backlog |
 | **[The API](docs/api.md)** | the JSON surface, bearer tokens, the OpenAPI document and the console at `/docs` |
 | **[Open in PrusaSlicer](docs/prusaslicer.md)** | the one-click "send to the slicer" bridge, the helper, and why the deep link cannot be used |
-| **[Development](docs/development.md)** | stack, local setup, the verification suites, CI |
+| **[Development](docs/development.md)** | stack, local setup, the verification suites, the full local run, CI, cutting a release |
 | **[Security audit](docs/security-audit.md)** | the OWASP Top 10 assessment, findings, and residual risk accepted |
 | **[Security policy](SECURITY.md)** | how to report a vulnerability |
-| **[Contributing](CONTRIBUTING.md)** | the eight suites are the contract; what a good change looks like |
+| **[Contributing](CONTRIBUTING.md)** | the eleven suites are the contract; what a good change looks like |
 | **[Changelog](CHANGELOG.md)** | what changed in each release |
 
 ## Security
@@ -406,11 +456,12 @@ something, see [SECURITY.md](SECURITY.md).
 
 ## Contributing
 
-Issues and pull requests are welcome. The eight verification suites in
-`scripts/` are the contract — `npm run verify:auth`, `verify:upload`,
-`verify:queue`, `verify:models`, `verify:passkey` and `probe:security` all run
-in CI against the built container image, not a dev server. If a change makes
-one fail, that is the change talking.
+Issues and pull requests are welcome. The eleven verification suites in
+`scripts/` are the contract — `verify:models`, `verify:auth`, `verify:upload`,
+`verify:import`, `verify:queue`, `verify:frr`, `verify:benefits`, `verify:catalog`, `verify:api`,
+`verify:passkey` and `probe:security`. All but `verify:models` run in CI against the built
+container image rather than a dev server. If a change makes one fail, that is the
+change talking.
 
 See [docs/development.md](docs/development.md) to get set up.
 

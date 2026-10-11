@@ -3,9 +3,11 @@ import Link from "next/link";
 import { requireUser, printerName } from "@/lib/authz";
 import { storyRef } from "@/lib/scope";
 import { HISTORY_STATUSES, listHistory } from "@/lib/stories";
-import { MATERIALS, relativeTime } from "@/lib/catalog";
+import { relativeTime } from "@/lib/catalog";
+import { knownMaterialNames } from "@/lib/catalog-data";
 import { AppHeader } from "@/components/app-header";
 import { Kicker, StatusChip } from "@/components/ui";
+import { ColorSwatch } from "@/components/color-swatch";
 import { RequeueStory } from "@/components/requeue-story";
 import type { StoryStatus } from "@prisma/client";
 
@@ -43,7 +45,10 @@ export default async function HistoryPage({
     searchParams,
     requireUser("/history"),
   ]);
-  const owner = await printerName();
+  const [owner, materialNames] = await Promise.all([
+    printerName(),
+    knownMaterialNames(),
+  ]);
   const isAdmin = user.role === "admin";
 
   // Only honour values we recognise; anything else falls back to "all".
@@ -52,7 +57,7 @@ export default async function HistoryPage({
       ? (status as StoryStatus)
       : undefined;
   const materialFilter =
-    material && (MATERIALS as readonly string[]).includes(material) ? material : undefined;
+    material && materialNames.includes(material) ? material : undefined;
   const sincePreset = SINCE.find((s) => s.key === since) ?? SINCE[3]; // default: all time
 
   const stories = await listHistory(user, {
@@ -99,7 +104,7 @@ export default async function HistoryPage({
             <span className="font-mono text-[11px] font-bold uppercase tracking-[0.08em] text-ink-2">Material</span>
             <select name="material" defaultValue={materialFilter ?? ""} className={selectClass}>
               <option value="">Any</option>
-              {MATERIALS.map((m) => (
+              {materialNames.map((m) => (
                 <option key={m} value={m}>{m}</option>
               ))}
             </select>
@@ -145,10 +150,10 @@ export default async function HistoryPage({
                   i < stories.length - 1 ? "border-b-2 border-dashed border-rule" : ""
                 } ${story.status === "Declined" ? "bg-cream-2" : ""}`}
               >
-                <span
-                  aria-hidden
+                <ColorSwatch
+                  mode={story.colorMode}
+                  style={story.colorStyle ?? story.colorHex}
                   className="h-[40px] w-[40px] flex-none rounded-full border-[3px] border-ink"
-                  style={{ background: story.colorHex }}
                 />
                 <div className="min-w-[180px] flex-[1_1_240px]">
                   <Link
@@ -166,7 +171,7 @@ export default async function HistoryPage({
                 {/* Only the person who filed it may re-queue it — an admin
                     seeing a ticket is not its owner (the action re-checks). */}
                 {story.uploaderId === user.id && (
-                  <RequeueStory storyId={story.id} label={storyRef(story.id)} from="/history" compact />
+                  <RequeueStory storyId={story.id} label={storyRef(story.id)} compact />
                 )}
               </div>
             ))

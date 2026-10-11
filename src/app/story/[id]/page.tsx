@@ -2,8 +2,10 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 
 import { getStoryOr404, printerName, requireUser, storyRef, FLOW } from "@/lib/authz";
-import { quantityText, relativeTime } from "@/lib/catalog";
+import { PRIORITY_CHIP, STORY_PRIORITIES, quantityText, relativeTime } from "@/lib/catalog";
+import { changeStoryPriority } from "@/app/actions/stories";
 import { formatBytes } from "@/lib/models";
+import { trustedSourceLink } from "@/lib/import-source";
 import { AppHeader } from "@/components/app-header";
 import { Fact, Notice, StatusChip } from "@/components/ui";
 import { AdminActions } from "@/components/admin-actions";
@@ -12,6 +14,7 @@ import { ModelViewer } from "@/components/model-viewer";
 import { OpenInSlicer } from "@/components/open-in-slicer";
 import { DownloadModel } from "@/components/download-model";
 import { Toast } from "@/components/toast";
+import { ColorSwatch } from "@/components/color-swatch";
 import { WithdrawStory } from "@/components/withdraw-story";
 import { RequeueStory } from "@/components/requeue-story";
 
@@ -42,6 +45,14 @@ export default async function StoryPage({
   const owner = await printerName();
 
   const currentIndex = (FLOW as readonly string[]).indexOf(story.status);
+  // Null for an upload — and for anything in the column that is not a link
+  // this app could have written, because it is about to become an href.
+  const source = trustedSourceLink(story.sourceUrl);
+  // Matches `changeStoryPriority` in src/lib/stories.ts: the requester or the
+  // owner, and only while there is still something to order.
+  const canReprioritise =
+    (user.role === "admin" || story.uploader.id === user.id) &&
+    story.status !== "Done" && story.status !== "Declined";
 
   return (
     <>
@@ -77,6 +88,23 @@ export default async function StoryPage({
                 </span>
               ))}
             </div>
+
+            {/* Where an imported model came from: the page with its author,
+                its licence and its print notes, which the file alone does not
+                carry. */}
+            {source && (
+              <p className="m-0 mt-[13.2px] font-mono text-[12px] uppercase tracking-[0.04em] text-ink-3">
+                Imported from{" "}
+                <a
+                  href={source.href}
+                  target="_blank"
+                  rel="noreferrer noopener"
+                  className="font-bold text-ink-2 underline underline-offset-4 hover:text-cherry-dk"
+                >
+                  {source.label} ↗
+                </a>
+              </p>
+            )}
 
             {/* Send the model to a PrusaSlicer on the viewer's own machine.
                 The bytes are fetched by a local helper, not by the slicer —
@@ -123,13 +151,14 @@ export default async function StoryPage({
               <div className="grid grid-cols-[repeat(auto-fit,minmax(120px,1fr))] gap-[17.6px]">
                 <Fact label="Asked by">{story.uploader.name}</Fact>
                 <Fact label="Quantity">{quantityText(story.quantity)}</Fact>
+                <Fact label="Priority">{PRIORITY_CHIP[story.priority]?.label ?? story.priority}</Fact>
                 <Fact label="Material">{story.material}</Fact>
                 <Fact label="Colour wish">
                   <span className="flex items-center gap-[8.8px]">
-                    <span
-                      aria-hidden
+                    <ColorSwatch
+                      mode={story.colorMode}
+                      style={story.colorStyle ?? story.colorHex}
                       className="h-[18px] w-[18px] rounded-full border-2 border-ink"
-                      style={{ background: story.colorHex }}
                     />
                     {story.colorName}
                   </span>
@@ -138,6 +167,45 @@ export default async function StoryPage({
                   <span className="text-cherry-dk">{story.tip}</span>
                 </Fact>
               </div>
+
+              {/* Change the priority after filing — the requester's on their
+                  own ticket, the owner's on any, while it is still on the
+                  rail. A plain form, so it works with JavaScript off. The
+                  service decides; this only decides whether to draw it. */}
+              {canReprioritise && (
+                <form
+                  action={changeStoryPriority}
+                  className="mt-[17.6px] flex flex-wrap items-end gap-[8.8px] border-t-2 border-dashed border-rule pt-[17.6px]"
+                >
+                  <input type="hidden" name="storyId" value={story.id} />
+                  <div>
+                    <label
+                      htmlFor="priority"
+                      className="mb-[4px] block font-mono text-[11px] font-bold uppercase tracking-[0.1em] text-ink-3"
+                    >
+                      Change priority
+                    </label>
+                    <select
+                      id="priority"
+                      name="priority"
+                      defaultValue={story.priority}
+                      className="rounded-card border-[3px] border-ink bg-porcelain px-[13px] py-[8px] text-[15px] font-bold text-ink"
+                    >
+                      {STORY_PRIORITIES.map((p) => (
+                        <option key={p} value={p}>
+                          {PRIORITY_CHIP[p]?.label ?? p}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <button
+                    type="submit"
+                    className="stamp cursor-pointer rounded-chip border-[3px] border-ink bg-aqua px-[18px] py-[9px] text-[14px] font-bold text-ink hover:bg-sun"
+                  >
+                    Set
+                  </button>
+                </form>
+              )}
             </div>
 
             {/* Optional slicer settings the requester noted (FRR-103). Shown so
@@ -232,7 +300,6 @@ export default async function StoryPage({
               <RequeueStory
                 storyId={story.id}
                 label={storyRef(story.id)}
-                from={`/story/${story.id}`}
               />
             )}
 
