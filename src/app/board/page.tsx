@@ -155,7 +155,7 @@ function EmptyBoard({ isAdmin, owner }: { isAdmin: boolean; owner: string }) {
       <p className="m-0 mx-auto mt-[11px] max-w-[46ch] text-[15.5px] leading-[1.5] text-ink-2">
         {isAdmin
           ? "When someone in the group sends a model it lands on the rail, and you get a notification."
-          : `Drop an .stl or .3mf and it turns up here as a ticket ${owner} can work through.`}
+          : `Drop an .stl, .3mf or .obj and it turns up here as a ticket ${owner} can work through.`}
       </p>
     </div>
   );

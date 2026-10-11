@@ -5,18 +5,34 @@
  */
 import { z } from "zod";
 
-export const MATERIALS = ["PLA", "PETG", "TPU", "Resin"] as const;
-export const DEFAULT_MATERIAL = "PETG";
+/** export const MATERIALS = ["PLA", "PETG", "TPU", "Resin"] as const; */
+/** export const DEFAULT_MATERIAL = "PETG"; */
+
+export const MATERIALS = ["PLA"] as const;
+export const DEFAULT_MATERIAL = "PLA";
 
 /** Filament swatches. Light ones need the inset ring to stay visible. */
+/** export const COLORS = [ */
+/**   { name: "Teal", hex: "#12645f" }, */
+/**   { name: "Slate", hex: "#4a5d78" }, */
+/**   { name: "Bone white", hex: "#eaecee" }, */
+/**   { name: "Graphite", hex: "#1b2126" }, */
+/**   { name: "Whatever's on", hex: "#b6bcc2" }, */
+/** ] as const; */
+/** export const DEFAULT_COLOR = COLORS[1]; // Slate */
+
 export const COLORS = [
-  { name: "Teal", hex: "#12645f" },
-  { name: "Slate", hex: "#4a5d78" },
-  { name: "Bone white", hex: "#eaecee" },
-  { name: "Graphite", hex: "#1b2126" },
+  { name: "Black", hex: "#000000" },
+  { name: "White", hex: "#FFFFFF" },
+  { name: "Gray", hex: "#8E9089" },
+  { name: "Red", hex: "#C12E1F" },
+  { name: "Blue", hex: "#0A2989" },
+  { name: "Gold", hex: "#F4A925" },
+  { name: "Yellow", hex: "#FEC600" },
   { name: "Whatever's on", hex: "#b6bcc2" },
 ] as const;
-export const DEFAULT_COLOR = COLORS[1]; // Slate
+
+export const DEFAULT_COLOR = COLORS[1]; // White
 
 /**
  * The default tips, seeded into the `Benefit` table on first run. The live
@@ -47,7 +63,6 @@ export const STATUS_CHIP: Record<
   Declined: { bg: "#e2e6ea", fg: "#6b747c" },
 };
 
-const colorNames = COLORS.map((c) => c.name) as unknown as [string, ...string[]];
 
 export const QuantitySchema = z.coerce
   .number()
@@ -65,7 +80,11 @@ export const WishSchema = z.object({
     .optional()
     .default(""),
   material: z.enum(MATERIALS),
-  colorName: z.enum(colorNames),
+  colorName: z
+  .string()
+  .trim()
+  .min(1, "Choose a filament.")
+  .max(120, "That filament name is too long."),
   quantity: QuantitySchema,
   // The tip is no longer a compile-time enum — it is an owner-managed list.
   // This module is shared with the client bundle and cannot read the database,

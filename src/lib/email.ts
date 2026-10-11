@@ -173,7 +173,7 @@ export function inviteEmail(opts: {
     to: opts.to,
     subject: `${opts.inviterName} is offering to print things for you`,
     text:
-      `${opts.inviterName} added you to Pretty Please Print — drop an .stl or .3mf and it goes up on the rail as a ticket.\n\n` +
+      `${opts.inviterName} added you to Pretty Please Print — drop an .stl, .3mf or .obj and it goes up on the rail as a ticket.\n\n` +
       `Claim your seat: ${opts.url}\n\n` +
       `The link works once and expires in ${opts.expiresInDays} days.`,
     html: shell(
@@ -181,8 +181,8 @@ export function inviteEmail(opts: {
       `<h1 style="margin:0 0 14px;font-family:${SLAB};font-size:29px;line-height:1.1;color:${INK}">You&rsquo;ve been handed a 3D printer</h1>
        <p style="margin:0 0 20px">
          <strong>${esc(opts.inviterName)}</strong> added you to Pretty Please Print.
-         Drop an <span style="font-family:${MONO}">.stl</span> or
-         <span style="font-family:${MONO}">.3mf</span>, say what you&rsquo;re hoping
+         Drop an <span style="font-family:${MONO}">.stl</span>,
+         <span style="font-family:${MONO}">.3mf</span> or <span style="font-family:${MONO}">.obj</span>, say what you&rsquo;re hoping
          for, and it goes up on the rail as a ticket you can follow.
        </p>
        ${button(opts.url, "Claim your seat")}
@@ -224,6 +224,160 @@ export function passwordResetEmail(opts: {
          Tired of typing a password? Save a passkey once you&rsquo;re back in.
        </p>
        ${fallback(opts.url)}`,
+    ),
+  };
+}
+
+export function newPrintRequestEmail(opts: {
+  to: string;
+  url: string;
+  uploaderName: string;
+  title: string;
+  filename: string;
+  material: string;
+  colorName: string;
+  quantity: number;
+  note: string;
+}): Mail {
+  return {
+    to: opts.to,
+    subject: `New print request — ${opts.title}`,
+    text:
+      `${opts.uploaderName} submitted a new print request.\n\n` +
+      `Request: ${opts.title}\n` +
+      `File: ${opts.filename}\n` +
+      `Material: ${opts.material}\n` +
+      `Color: ${opts.colorName}\n` +
+      `Quantity: ${opts.quantity}\n` +
+      (opts.note ? `Note: ${opts.note}\n` : "") +
+      `\nView the request: ${opts.url}`,
+    html: shell(
+      "NEW PRINT REQUEST",
+      `<h1 style="margin:0 0 14px;font-family:${SLAB};font-size:29px;line-height:1.1;color:${INK}">
+        Someone wants something printed
+      </h1>
+      <p style="margin:0 0 20px">
+        <strong>${esc(opts.uploaderName)}</strong> submitted a new print request.
+      </p>
+
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"
+        style="border-collapse:collapse;margin:0 0 24px">
+        <tr>
+          <td style="padding:8px 10px;border:2px solid ${INK};font-family:${MONO};font-size:11px;font-weight:bold">REQUEST</td>
+          <td style="padding:8px 10px;border:2px solid ${INK}">${esc(opts.title)}</td>
+        </tr>
+        <tr>
+          <td style="padding:8px 10px;border:2px solid ${INK};font-family:${MONO};font-size:11px;font-weight:bold">FILE</td>
+          <td style="padding:8px 10px;border:2px solid ${INK}">${esc(opts.filename)}</td>
+        </tr>
+        <tr>
+          <td style="padding:8px 10px;border:2px solid ${INK};font-family:${MONO};font-size:11px;font-weight:bold">MATERIAL</td>
+          <td style="padding:8px 10px;border:2px solid ${INK}">${esc(opts.material)}</td>
+        </tr>
+        <tr>
+          <td style="padding:8px 10px;border:2px solid ${INK};font-family:${MONO};font-size:11px;font-weight:bold">COLOR</td>
+          <td style="padding:8px 10px;border:2px solid ${INK}">${esc(opts.colorName)}</td>
+        </tr>
+        <tr>
+          <td style="padding:8px 10px;border:2px solid ${INK};font-family:${MONO};font-size:11px;font-weight:bold">QUANTITY</td>
+          <td style="padding:8px 10px;border:2px solid ${INK}">${opts.quantity}</td>
+        </tr>
+      </table>
+
+      ${
+        opts.note
+          ? `<p style="margin:0 0 24px;padding:14px;background:${SUN};border:2px solid ${INK}">
+               <strong>Note:</strong> ${esc(opts.note)}
+             </p>`
+          : ""
+      }
+
+      ${button(opts.url, "View print request")}
+      ${fallback(opts.url)}`,
+    ),
+  };
+}
+
+export function newCommentEmail(opts: {
+  to: string;
+  url: string;
+  authorName: string;
+  title: string;
+  body: string;
+}): Mail {
+  return {
+    to: opts.to,
+    subject: `New comment — ${opts.title}`,
+    text:
+      `${opts.authorName} commented on "${opts.title}".\n\n` +
+      `${opts.body}\n\n` +
+      `View the request: ${opts.url}`,
+    html: shell(
+      "NEW COMMENT",
+      `<h1 style="margin:0 0 14px;font-family:${SLAB};font-size:29px;line-height:1.1;color:${INK}">
+        Someone left a comment
+      </h1>
+      <p style="margin:0 0 20px">
+        <strong>${esc(opts.authorName)}</strong> commented on
+        <strong>${esc(opts.title)}</strong>.
+      </p>
+
+      <p style="margin:0 0 24px;padding:16px;background:${CREAM};border:2px solid ${INK};font-size:17px">
+        ${esc(opts.body)}
+      </p>
+
+      ${button(opts.url, "View conversation")}
+      ${fallback(opts.url)}`,
+    ),
+  };
+}
+export function storyStatusChangedEmail(opts: {
+  to: string;
+  url: string;
+  title: string;
+  fromStatus: string;
+  toStatus: string;
+}): Mail {
+  return {
+    to: opts.to,
+    subject: `Print request updated — ${opts.title}`,
+    text:
+      `Your print request "${opts.title}" has been updated.\n\n` +
+      `Status: ${opts.toStatus}\n\n` +
+      `View the request: ${opts.url}`,
+    html: shell(
+      "PRINT REQUEST UPDATED",
+      `<h1 style="margin:0 0 14px;font-family:${SLAB};font-size:29px;line-height:1.1;color:${INK}">
+        Your print request moved
+      </h1>
+
+      <p style="margin:0 0 20px">
+        <strong>${esc(opts.title)}</strong> is now
+        <strong>${esc(opts.toStatus)}</strong>.
+      </p>
+
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"
+        style="border-collapse:collapse;margin:0 0 24px">
+        <tr>
+          <td style="padding:10px;border:2px solid ${INK};font-family:${MONO};font-size:11px;font-weight:bold">
+            PREVIOUS
+          </td>
+          <td style="padding:10px;border:2px solid ${INK}">
+            ${esc(opts.fromStatus)}
+          </td>
+        </tr>
+        <tr>
+          <td style="padding:10px;border:2px solid ${INK};font-family:${MONO};font-size:11px;font-weight:bold">
+            NOW
+          </td>
+          <td style="padding:10px;border:2px solid ${INK}">
+            ${esc(opts.toStatus)}
+          </td>
+        </tr>
+      </table>
+
+      ${button(opts.url, "View print request")}
+      ${fallback(opts.url)}`,
     ),
   };
 }

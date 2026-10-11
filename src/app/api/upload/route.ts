@@ -1,10 +1,12 @@
+import { newPrintRequestEmail, sendMail } from "@/lib/email";
 import { NextResponse } from "next/server";
 
 import { db } from "@/lib/db";
 import { currentUser, notify, printerOwner, storyRef } from "@/lib/authz";
 import type { Actor } from "@/lib/scope";
 import { record } from "@/lib/audit";
-import { WishSchema, hexForColor } from "@/lib/catalog";
+import { WishSchema } from "@/lib/catalog";
+import { findAvailableFilament } from "@/lib/spoolman";
 import { activeBenefitLabels } from "@/lib/benefits";
 import {
   MAX_BYTES,
@@ -123,6 +125,7 @@ async function handleUpload(request: Request, user: Actor) {
   if (!(file instanceof File)) return bad(400, "No file was attached.");
   if (file.size > MAX_BYTES) return bad(413, REJECTION_COPY.too_large);
 
+
   const wish = WishSchema.safeParse({
     title: form.get("title") ?? "",
     material: form.get("material"),
@@ -132,9 +135,35 @@ async function handleUpload(request: Request, user: Actor) {
     note: form.get("note") ?? "",
     printSettings: form.get("printSettings") ?? "",
   });
+
   if (!wish.success) {
-    return bad(400, wish.error.issues[0]?.message ?? "Check the form.");
+    return bad(
+      400,
+      wish.error.issues[0]?.message ?? "Check the form.",
+    );
   }
+
+  // Resolve the selected filament against the server-side inventory.
+  // Never trust a color hex value submitted by the browser.
+  const selectedFilament = await findAvailableFilament(
+    wish.data.colorName,
+  );
+
+  if (!selectedFilament) {
+    return bad(
+      400,
+      "That filament is no longer available. Refresh the page and choose another.",
+    );
+  }
+
+  if (selectedFilament.material !== wish.data.material) {
+    return bad(
+      400,
+      "The selected filament and material do not match.",
+    );
+  }
+
+
 
   // The tip is owner-managed data, so the list — not a compile-time enum — is
   // what decides. A benefit the owner has retired, or one never on the list,
@@ -189,7 +218,7 @@ async function handleUpload(request: Request, user: Actor) {
         quantity: wish.data.quantity,
         material: wish.data.material,
         colorName: wish.data.colorName,
-        colorHex: hexForColor(wish.data.colorName),
+        colorHex: selectedFilament.hex,
         tip: wish.data.tip,
         note: wish.data.note,
         printSettings: wish.data.printSettings,
@@ -206,15 +235,35 @@ async function handleUpload(request: Request, user: Actor) {
   }
 
   // "every upload notifies the admin"
-  const admin = await printerOwner();
-  if (admin) {
-    await notify({
-      recipientId: admin.id,
-      storyId: story.id,
-      text: `${user.name} uploaded “${title}”.`,
-    });
-  }
+const admin = await printerOwner();
+if (admin) {
+  await notify({
+    recipientId: admin.id,
+    storyId: story.id,
+    text: `${user.name} uploaded “${title}”.`,
+  });
 
+  try {
+    const baseUrl = process.env.APP_URL ?? "http://localhost:4000";
+console.log("[upload] sending notification email to:", admin.email);
+const sent = await sendMail(
+  newPrintRequestEmail({
+    to: admin.email,
+    url: `${baseUrl}/story/${story.id}`,
+    uploaderName: user.name,
+    title,
+    filename,
+    material: wish.data.material,
+    colorName: wish.data.colorName,
+    quantity: wish.data.quantity,
+    note: wish.data.note,
+  }),
+);
+console.log("[upload] notification email result:", sent);
+  } catch (error) {
+    console.error("[upload] notification email failed", error);
+  }
+}
   await record({
     action: "story.created",
     actor: user,

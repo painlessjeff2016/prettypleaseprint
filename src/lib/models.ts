@@ -24,7 +24,7 @@ import {
 export { ACCEPTED_EXTENSIONS, formatBytes };
 export const MAX_BYTES = MAX_UPLOAD_BYTES;
 
-export type ModelFormat = "stl" | "3mf";
+export type ModelFormat = "stl" | "3mf" | "obj";
 
 export type Rejection =
   | "empty"
@@ -37,9 +37,8 @@ export type Rejection =
 export const REJECTION_COPY: Record<Rejection, string> = {
   empty: "That file is empty.",
   too_large: `That file is over ${formatBytes(MAX_UPLOAD_BYTES)}.`,
-  bad_extension: "Only .stl and .3mf files can be printed here.",
-  not_a_model:
-    "That does not look like an STL or 3MF inside, whatever it is named.",
+  bad_extension: "Only .stl, .3mf and .obj files can be printed here.",
+  not_a_model: "That does not look like an STL, 3MF or OBJ inside, whatever it is named.",
   corrupt: "That file is damaged — it could not be read all the way through.",
   no_geometry: "There is no geometry in that file.",
 };
@@ -150,6 +149,86 @@ function measureAsciiStl(bytes: Uint8Array): { box: Box; triangles: number } {
     vertices++;
   }
   return { box, triangles: Math.floor(vertices / 3) };
+}
+
+/**
+ * Measure a Wavefront OBJ.
+ *
+ * OBJ is a text format. Vertex records (`v`) contain the geometry coordinates;
+ * face records (`f`) reference those vertices. Faces may contain more than
+ * three vertices, so an n-sided polygon represents n-2 triangles when
+ * triangulated by a slicer.
+ *
+ * Texture coordinates (`vt`) and normals (`vn`) deliberately do not count as
+ * geometry.
+ */
+function measureObj(bytes: Uint8Array): { box: Box; triangles: number } | null {
+  const text = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+  const box = emptyBox();
+
+  let vertices = 0;
+  let triangles = 0;
+  let faces = 0;
+
+  for (const rawLine of text.split(/\r?\n/)) {
+    const line = rawLine.trim();
+
+    if (!line || line.startsWith("#")) continue;
+
+    if (/^v\s+/i.test(line)) {
+      const fields = line.split(/\s+/);
+
+      if (fields.length < 4) continue;
+
+      const x = Number(fields[1]);
+      const y = Number(fields[2]);
+      const z = Number(fields[3]);
+
+      if (
+        !Number.isFinite(x) ||
+        !Number.isFinite(y) ||
+        !Number.isFinite(z)
+      ) {
+        continue;
+      }
+
+      expand(box, x, y, z);
+      vertices++;
+      continue;
+    }
+
+    if (/^f\s+/i.test(line)) {
+      const fields = line.split(/\s+/).slice(1);
+
+      // A face requires at least three vertex references.
+      if (fields.length < 3) continue;
+
+      // Each reference starts with a vertex index:
+      //   f 1 2 3
+      //   f 1/1 2/2 3/3
+      //   f 1//1 2//2 3//3
+      // Negative OBJ indices are legal too.
+      const valid = fields.every((field) => {
+        const vertexIndex = field.split("/", 1)[0];
+        return /^-?\d+$/.test(vertexIndex ?? "");
+      });
+
+      if (!valid) continue;
+
+      triangles += fields.length - 2;
+      faces++;
+
+      if (triangles > MAX_TRIANGLES) {
+        throw new Error("OBJ exceeds triangle limit");
+      }
+    }
+  }
+
+  if (vertices === 0 || faces === 0 || triangles === 0) {
+    return null;
+  }
+
+  return { box, triangles };
 }
 
 /** 3MF declares its unit on the <model> element; everything becomes mm. */
@@ -428,23 +507,40 @@ export function inspectModel(filename: string, bytes: Uint8Array): Inspection {
     } else if (startsWith(bytes, ZIP_MAGIC)) {
       format = "3mf";
       measured = measure3mf(bytes);
-      if (!measured) return { ok: false, reason: "not_a_model" };
+
+      if (!measured) {
+        return { ok: false, reason: "not_a_model" };
+      }
     } else {
-      return { ok: false, reason: "not_a_model" };
+      const obj = measureObj(bytes);
+
+      if (!obj) {
+        return { ok: false, reason: "not_a_model" };
+      }
+
+      format = "obj";
+      measured = obj;
     }
   } catch {
     return { ok: false, reason: "corrupt" };
   }
 
-  // The name has to agree with the bytes: a .3mf that is really an STL is a
-  // sign something is wrong, even if both are printable.
-  if ((ext === ".stl") !== (format === "stl")) {
+  // The filename must agree with the format detected from the actual bytes.
+  // Renaming one supported model format to another must not bypass validation.
+  const expectedFormat: Record<string, ModelFormat> = {
+    ".stl": "stl",
+    ".3mf": "3mf",
+    ".obj": "obj",
+  };
+
+  if (expectedFormat[ext] !== format) {
     return { ok: false, reason: "not_a_model" };
   }
 
   if (!measured || measured.triangles === 0) {
     return { ok: false, reason: "no_geometry" };
   }
+
   if (!Number.isFinite(measured.box.min[0])) {
     return { ok: false, reason: "no_geometry" };
   }

@@ -10,7 +10,7 @@ import { VIEWER_MAX_BYTES, formatBytes } from "@/lib/upload-limits";
  *
  * Replaces the stand-in primitive the prototype used — it could not parse a
  * mesh, so it drew a torus knot and hoped. This loads the actual uploaded
- * `.stl` or `.3mf` from `/api/models/[id]`, which is same-origin and scoped
+ * `.stl`, `.3mf` or `.obj` from `/api/models/[id]`, which is same-origin and scoped
  * by the ownership rule, so nothing here needs a CSP relaxation.
  *
  * three.js is ~600 KB, so it is imported dynamically inside the effect: it is
@@ -71,8 +71,11 @@ export function ModelViewer({
       try {
         const THREE = await import("three");
         const isStl = /\.stl$/i.test(filename);
-        const { STLLoader } = await import("three/examples/jsm/loaders/STLLoader.js");
-        const { ThreeMFLoader } = await import("three/examples/jsm/loaders/3MFLoader.js");
+const isObj = /\.obj$/i.test(filename);
+
+const { STLLoader } = await import("three/examples/jsm/loaders/STLLoader.js");
+const { ThreeMFLoader } = await import("three/examples/jsm/loaders/3MFLoader.js");
+const { OBJLoader } = await import("three/examples/jsm/loaders/OBJLoader.js");
 
         const response = await fetch(`/api/models/${storyId}`);
         if (!response.ok) {
@@ -91,13 +94,17 @@ export function ModelViewer({
         // declared as returning BufferGeometry<NormalOrGLBufferAttributes>,
         // which three's own Mesh and EdgesGeometry do not accept. The runtime
         // object is an ordinary BufferGeometry.
-        let geometry: THREE.BufferGeometry | null = null;
-        let group: THREE.Object3D | null = null;
-        if (isStl) {
-          geometry = new STLLoader().parse(buffer) as unknown as THREE.BufferGeometry;
-        } else {
-          group = new ThreeMFLoader().parse(buffer);
-        }
+let geometry: THREE.BufferGeometry | null = null;
+let group: THREE.Object3D | null = null;
+
+if (isStl) {
+  geometry = new STLLoader().parse(buffer) as unknown as THREE.BufferGeometry;
+} else if (isObj) {
+  const text = new TextDecoder("utf-8", { fatal: false }).decode(buffer);
+  group = new OBJLoader().parse(text);
+} else {
+  group = new ThreeMFLoader().parse(buffer);
+}
 
         const width = el.clientWidth || 480;
         const height = el.clientHeight || 380;
@@ -164,8 +171,8 @@ export function ModelViewer({
         const centre = box.getCenter(new THREE.Vector3());
         const largest = Math.max(size.x, size.y, size.z) || 1;
 
-        // A faint edge overlay, as the handoff specifies. STL only: a 3MF
-        // arrives as a group of meshes, and deriving one edge set from it
+        // A faint edge overlay, as the handoff specifies. STL only: 3MF and OBJ
+        // arrive as groups of meshes, and deriving one edge set from them
         // would mean walking the tree for a line that is 16% opaque anyway.
         if (geometry) {
           inner.add(
@@ -393,7 +400,7 @@ function TooLargeToPreview({ fileSize }: { fileSize: number }) {
       <p className="m-0 mt-[17.6px] border-t-2 border-dashed border-ink-3 pt-[11px] text-[13.5px] leading-[1.5] text-ink-2">
         Nothing is wrong with the file. It is stored whole and it prints exactly
         as it would have. <strong>Download</strong> and{" "}
-        <strong>Open in PrusaSlicer</strong> both work on it — a slicer is built
+        <strong>Open in OrcaSlicer</strong> both work on it — a slicer is built
         for meshes this size and a browser is not.
       </p>
     </div>

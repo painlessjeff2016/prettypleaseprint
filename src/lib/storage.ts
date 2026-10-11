@@ -60,7 +60,12 @@ export const s3 = new S3Client({
 export function storageKeyFor(extension: string): string {
   const now = new Date();
   const yyyymm = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}`;
-  const ext = extension === ".3mf" ? "3mf" : "stl";
+  const ext =
+  extension === ".3mf"
+    ? "3mf"
+    : extension === ".obj"
+      ? "obj"
+      : "stl";
   return `models/${yyyymm}/${randomUUID()}.${ext}`;
 }
 
@@ -128,4 +133,5 @@ export async function copyModel(srcKey: string, destKey: string): Promise<void> 
 export const MIME_FOR: Record<string, string> = {
   ".stl": "model/stl",
   ".3mf": "model/3mf",
+  ".obj": "model/obj",
 };

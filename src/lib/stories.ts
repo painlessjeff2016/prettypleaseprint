@@ -17,6 +17,11 @@ import {
 } from "@/lib/scope";
 import { copyModel, deleteModel, storageKeyFor } from "@/lib/storage";
 import { extensionOf } from "@/lib/models";
+import {
+  newCommentEmail,
+  sendMail,
+  storyStatusChangedEmail,
+} from "@/lib/email";
 
 /**
  * Everything that can happen to a ticket, in one place.
@@ -326,6 +331,30 @@ export async function advanceStory(actor: Actor, id: number) {
     storyId: story.id,
     text: `${firstName(actor.name)} moved “${story.title}” to ${next}.`,
   });
+const recipient = await db.user.findUnique({
+  where: { id: story.uploaderId },
+  select: { email: true },
+});
+
+if (recipient?.email) {
+  try {
+    const baseUrl = process.env.APP_URL ?? "http://localhost:4000";
+
+    const sent = await sendMail(
+      storyStatusChangedEmail({
+        to: recipient.email,
+        url: `${baseUrl}/story/${story.id}`,
+        title: story.title,
+        fromStatus: story.status,
+        toStatus: next,
+      }),
+    );
+
+    console.log("[status] notification email result:", sent);
+  } catch (error) {
+    console.error("[status] notification email failed", error);
+  }
+}
   await record({
     action: "story.status_changed",
     actor,
@@ -364,6 +393,30 @@ export async function declineStory(actor: Actor, id: number) {
     storyId: story.id,
     text: `${firstName(actor.name)} declined “${story.title}”.`,
   });
+const recipient = await db.user.findUnique({
+  where: { id: story.uploaderId },
+  select: { email: true },
+});
+
+if (recipient?.email) {
+  try {
+    const baseUrl = process.env.APP_URL ?? "http://localhost:4000";
+
+    const sent = await sendMail(
+      storyStatusChangedEmail({
+        to: recipient.email,
+        url: `${baseUrl}/story/${story.id}`,
+        title: story.title,
+        fromStatus: story.status,
+        toStatus: "Declined",
+      }),
+    );
+
+    console.log("[status] notification email result:", sent);
+  } catch (error) {
+    console.error("[status] notification email failed", error);
+  }
+}
   await record({
     action: "story.declined",
     actor,
@@ -564,8 +617,8 @@ export async function withdrawStory(actor: Actor, id: number) {
  * The file is *copied*, not shared: a fresh object under a generated key, so
  * the new ticket and the old one own independent geometry and withdrawing
  * either one never disturbs the other's file. Only the person who filed the
- * original may re-queue it — being able to see a ticket (an admin sees all) is
- * not being the person whose request it is to repeat.
+ * original may re-queue it — being able to see a ticket (an admin sees all)
+ * is not being the person whose request it is to repeat.
  */
 export async function requeueStory(actor: Actor, id: number) {
   const src = await db.story.findFirst({
@@ -698,12 +751,46 @@ export async function addComment(actor: Actor, id: number, rawBody: unknown) {
   const recipientId =
     actor.role === "admin" ? story.uploaderId : (await printerOwner())?.id;
 
-  if (recipientId && recipientId !== actor.id) {
+console.log("[comment] DEBUG", {
+  actorId: actor.id,
+  actorRole: actor.role,
+  storyId: story.id,
+  uploaderId: story.uploaderId,
+  recipientId,
+});
+
+if (recipientId && recipientId !== actor.id) {
     await notify({
       recipientId,
       storyId: story.id,
       text: `${firstName(actor.name)} commented on “${story.title}”.`,
     });
+
+    // Send the same notification by email as well.
+    const recipient = await db.user.findUnique({
+      where: { id: recipientId },
+      select: { email: true },
+    });
+
+    if (recipient?.email) {
+      try {
+        const baseUrl = process.env.APP_URL ?? "http://localhost:4000";
+
+        const sent = await sendMail(
+          newCommentEmail({
+            to: recipient.email,
+            url: `${baseUrl}/story/${story.id}`,
+            authorName: actor.name,
+            title: story.title,
+            body,
+          }),
+        );
+
+        console.log("[comment] notification email result:", sent);
+      } catch (error) {
+        console.error("[comment] notification email failed", error);
+      }
+    }
   }
 
   await record({

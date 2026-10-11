@@ -60,8 +60,9 @@ export default async function InvitePage({
       <Kicker>Your table is ready</Kicker>
       <H1>{inviter?.name ?? "Someone"} will print things for you</H1>
       <Lead>
-        Upload an <span className="font-mono">.stl</span> or{" "}
-        <span className="font-mono">.3mf</span>, say what you are hoping for,
+        Upload an <span className="font-mono">.stl</span>,
+        <span className="font-mono">.3mf</span> or{" "}
+<span className="font-mono">.obj</span>, say what you are hoping for,
         and it lands on the backlog as a story you can follow. Pick a name to
         go by, a username and a password, and you are in.
       </Lead>

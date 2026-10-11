@@ -3,13 +3,8 @@
 import { useCallback, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
-import {
-  COLORS,
-  DEFAULT_COLOR,
-  DEFAULT_MATERIAL,
-  MATERIALS,
-  QUANTITY_PRESETS,
-} from "@/lib/catalog";
+import { QUANTITY_PRESETS } from "@/lib/catalog";
+import type { FilamentChoice } from "@/lib/spoolman";
 // The same numbers the server enforces. `models.ts` cannot be imported here —
 // it would pull `fflate` and the mesh parser into the browser bundle — which
 // is why these three used to be copied into this file by hand.
@@ -74,9 +69,11 @@ function Segmented<T extends string | number>({
 export function UploadForm({
   owner,
   benefits,
+  filaments,
 }: {
   owner: string;
   benefits: Benefit[];
+  filaments: FilamentChoice[];
 }) {
   // Default to a preferred benefit if the owner has marked one, else the first
   // on the list, else empty (the list is seeded, so empty is only a safety net).
@@ -90,9 +87,12 @@ export function UploadForm({
   const [phase, setPhase] = useState<Phase>({ kind: "idle" });
 
   const [title, setTitle] = useState("");
-  const [material, setMaterial] = useState<string>(DEFAULT_MATERIAL);
   const [quantity, setQuantity] = useState<number>(1);
-  const [color, setColor] = useState<string>(DEFAULT_COLOR.name);
+  const [color, setColor] = useState<string>(
+  filaments.find((f) => f.name === "Basic PLA – White")?.name ??
+  filaments[0]?.name ??
+  "Whatever's on",
+);
   const [tip, setTip] = useState<string>(defaultTip);
   const [note, setNote] = useState("");
   const [printSettings, setPrintSettings] = useState("");
@@ -110,7 +110,7 @@ export function UploadForm({
       setFile(null);
       return setPhase({
         kind: "error",
-        message: "Only .stl and .3mf files can be printed here.",
+        message: "Only .stl, .3mf and .obj files can be printed here.",
       });
     }
     if (picked.size > MAX_UPLOAD_BYTES) {
@@ -136,7 +136,7 @@ export function UploadForm({
     const body = new FormData();
     body.set("file", file);
     body.set("title", title);
-    body.set("material", material);
+    body.set("material", "PLA");
     body.set("colorName", color);
     body.set("quantity", String(quantity));
     body.set("tip", tip);
@@ -205,7 +205,7 @@ export function UploadForm({
         <input
           ref={inputRef}
           type="file"
-          accept=".stl,.3mf,model/stl,model/3mf"
+          accept=".stl,.3mf,.obj,model/stl,model/3mf,model/obj"
           className="hidden"
           disabled={busy}
           onChange={(e) => accept(e.target.files?.[0] ?? null)}
@@ -215,7 +215,7 @@ export function UploadForm({
           className="mx-auto mb-[13.2px] block h-[56px] w-[56px] rounded-full border-[3px] border-ink bg-aqua"
         />
         <span className="block font-display text-[19px] text-ink">
-          {file ? file.name : "Drop your .stl or .3mf here"}
+          {file ? file.name : "Drop your .stl, .3mf or .obj here"}
         </span>
         <span className="mt-[6px] block font-mono text-[12px] uppercase tracking-[0.04em] text-ink-3">
           {busy
@@ -241,29 +241,18 @@ export function UploadForm({
         </div>
       )}
 
-      {/* ---- title + material ---- */}
-      <div className="mt-[26.4px] grid grid-cols-[repeat(auto-fit,minmax(280px,1fr))] gap-[22px]">
-        <div>
-          <Label htmlFor="title">What is it?</Label>
-          <input
-            id="title"
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            maxLength={120}
-            placeholder="Hook for the monitor arm"
-            className="w-full rounded-card border-[3px] border-ink bg-porcelain px-[15px] py-[12px] text-[16px] text-ink placeholder:text-ink-3"
-          />
-        </div>
-        <div>
-          <Label htmlFor="material">Material you&rsquo;d like</Label>
-          <Segmented
-            label="Material"
-            options={MATERIALS}
-            value={material}
-            onChange={setMaterial}
-          />
-        </div>
-      </div>
+{/* ---- title ---- */}
+<div className="mt-[26.4px] max-w-[780px]">
+  <Label htmlFor="title">What is it?</Label>
+  <input
+    id="title"
+    value={title}
+    onChange={(e) => setTitle(e.target.value)}
+    maxLength={120}
+    placeholder="Hook for the monitor arm"
+    className="w-full rounded-card border-[3px] border-ink bg-porcelain px-[15px] py-[12px] text-[16px] text-ink placeholder:text-ink-3"
+  />
+</div>
 
       {/* ---- quantity ---- */}
       <div className="mt-[22px] max-w-[320px]">
@@ -291,46 +280,62 @@ export function UploadForm({
         </div>
       </div>
 
-      {/* ---- colour ---- */}
-      <fieldset className="mt-[22px] border-0 p-0">
-        <legend className="mb-[8.8px] font-mono text-[12px] font-bold uppercase tracking-[0.1em] text-ink-2">
-          Colour you&rsquo;re hoping for
-        </legend>
-        <div className="flex flex-wrap gap-[13.2px]">
-          {COLORS.map((c) => {
-            const active = c.name === color;
-            return (
-              <button
-                key={c.name}
-                type="button"
-                role="radio"
-                aria-checked={active}
-                aria-label={`${c.name} filament`}
-                onClick={() => setColor(c.name)}
-                className="flex w-[80px] cursor-pointer flex-col items-center gap-[7px] border-0 bg-transparent p-0"
-              >
-                <span
-                  aria-hidden
-                  className={`h-[48px] w-[48px] rounded-full border-[3px] border-ink transition-transform ${
-                    active ? "scale-110 ring-[4px] ring-cherry-dk ring-offset-2 ring-offset-cream" : ""
-                  }`}
-                  style={{ background: c.hex }}
-                />
-                <span
-                  className={`font-mono text-[11px] font-bold uppercase tracking-[0.04em] ${
-                    active ? "text-cherry-dk" : "text-ink-2"
-                  }`}
-                >
-                  {c.name}
-                </span>
-              </button>
-            );
-          })}
-        </div>
-        <p className="mt-[11px] font-mono text-[11.5px] uppercase tracking-[0.04em] text-ink-3">
-          {owner} confirms what&rsquo;s actually on the spool.
-        </p>
-      </fieldset>
+{/* ---- filament ---- */}
+<fieldset className="mt-[22px] border-0 p-0">
+  <legend className="mb-[12px] font-mono text-[12px] font-bold uppercase tracking-[0.1em] text-ink-2">
+    Filament you&rsquo;d like
+  </legend>
+
+  <div
+    role="radiogroup"
+    aria-label="Available filament"
+    className="grid grid-cols-[repeat(auto-fill,minmax(145px,1fr))] gap-[13.2px]"
+  >
+    {filaments.map((filament) => {
+      const active = filament.name === color;
+
+      return (
+        <button
+          key={filament.name}
+          type="button"
+          role="radio"
+          aria-checked={active}
+          aria-label={filament.name}
+          onClick={() => setColor(filament.name)}
+          disabled={busy}
+          className={`flex min-h-[100px] cursor-pointer flex-col items-center justify-center gap-[10px] rounded-card border-[3px] px-[10px] py-[13px] transition-colors ${
+            active
+              ? "border-cherry-dk bg-sun-wash"
+              : "border-ink bg-porcelain hover:bg-sun-wash"
+          }`}
+        >
+          <span
+            aria-hidden
+            className={`h-[42px] w-[42px] rounded-full border-[3px] border-ink ${
+              active
+                ? "ring-[3px] ring-cherry-dk ring-offset-2 ring-offset-cream"
+                : ""
+            }`}
+            style={{ backgroundColor: filament.hex }}
+          />
+
+          <span
+            className={`text-center font-mono text-[11px] font-bold uppercase leading-[1.4] tracking-[0.04em] ${
+              active ? "text-cherry-dk" : "text-ink-2"
+            }`}
+          >
+            {filament.name}
+          </span>
+        </button>
+      );
+    })}
+  </div>
+
+  <p className="mt-[11px] font-mono text-[11.5px] uppercase tracking-[0.04em] text-ink-3">
+    Available filament is synced with Spoolman.
+    {" "}{owner} confirms the final choice.
+  </p>
+</fieldset>
 
       {/* ---- the tip jar ---- */}
       {/*

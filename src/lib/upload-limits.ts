@@ -93,7 +93,7 @@ export const MAX_REQUEST_BYTES = Math.ceil(MAX_UPLOAD_BYTES * 1.2);
  */
 export const VIEWER_MAX_BYTES = 50 * 1024 * 1024;
 
-export const ACCEPTED_EXTENSIONS = [".stl", ".3mf"] as const;
+export const ACCEPTED_EXTENSIONS = [".stl", ".3mf", ".obj"] as const;
 
 /** Bytes as a person would say them. Shared so the form and the API agree. */
 export function formatBytes(n: number): string {

@@ -39,6 +39,15 @@ x-restart: &restart
   restart: unless-stopped
 
 services:
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: ppp-cloudflared
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN}
+    depends_on:
+      - app
+    networks:
+      - default
   # Applies migrations and upserts the admin, then exits. The app waits for it
   # to finish, so a deploy can never serve against an unmigrated schema.
   #
@@ -53,7 +62,7 @@ services:
       DATABASE_URL: postgresql://ppp:${DB_PASSWORD:?set DB_PASSWORD}@db:5432/ppp?schema=public
       # The set-password link it prints has to point at the hostname the
       # browser uses, not at the container's idea of localhost.
-      BETTER_AUTH_URL: ${APP_URL:-http://localhost:3000}
+      BETTER_AUTH_URL: ${APP_URL:-http://localhost:4000}
     depends_on:
       db:
         condition: service_healthy
@@ -70,7 +79,7 @@ services:
       # Better Auth derives cookie scope, invitation and set-password link
       # URLs, and the WebAuthn relying party from this. It must match what the browser actually sees,
       # including scheme and port.
-      BETTER_AUTH_URL: ${APP_URL:-http://localhost:3000}
+      BETTER_AUTH_URL: ${APP_URL:-http://localhost:4000}
       # Forwarded client addresses are only believed when a proxy is genuinely
       # the only way in — see docker-compose.proxy.yml and src/lib/client-ip.ts.
       TRUST_PROXY_HEADERS: ${TRUST_PROXY_HEADERS:-false}
@@ -85,7 +94,7 @@ services:
       migrate:
         condition: service_completed_successfully
     healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 30s
       timeout: 5s
       start_period: 20s
@@ -110,7 +119,7 @@ services:
   # Model files. Never exposed to the internet — the app fetches from it
   # server-side and hands out short-lived signed URLs.
   minio:
-    image: minio/minio:latest
+    image: quay.io/minio/minio:latest
     container_name: ppp-minio
     <<: *restart
     command: server /data --console-address ":9001"

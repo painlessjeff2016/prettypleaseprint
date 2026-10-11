@@ -55,7 +55,7 @@ export function OpenInSlicer({
       <summary className="stamp inline-flex cursor-pointer list-none items-center gap-[8px] rounded-chip border-[3px] border-ink bg-porcelain px-[15px] py-[8px] text-[14px] font-bold text-ink hover:bg-sun">
         {/* An unadorned wedge, not a brand mark — nothing here claims to be Prusa's. */}
         <span aria-hidden className="font-mono text-[15px] leading-none">▸</span>
-        Open in PrusaSlicer
+        Open in OrcaSlicer
       </summary>
 
       <div className="mt-[8.8px] rounded-card border-[3px] border-ink bg-cream-2 p-[13.2px]">
@@ -66,18 +66,9 @@ export function OpenInSlicer({
           Send {storyRef(storyId)} to the slicer
         </a>
         <p className="m-0 mt-[8.8px] font-mono text-[11px] leading-[1.5] text-ink-2">
-          Opens PrusaSlicer on <strong>this</strong> machine. Needs the one-time
-          helper — see{" "}
-          <a
-            href="https://github.com/danileau/prettypleaseprint/blob/main/docs/prusaslicer.md"
-            target="_blank"
-            rel="noreferrer noopener"
-            className="underline underline-offset-2 hover:text-cherry-dk"
-          >
-            the setup
-          </a>
-          . Nothing happens if it is not installed — the download beside this
-          works anywhere.
+Opens OrcaSlicer on <strong>this</strong> machine using the one-time
+PPP helper. If the helper is not installed, use the download button
+beside this instead.
         </p>
       </div>
     </details>

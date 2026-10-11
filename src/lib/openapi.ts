@@ -2,7 +2,7 @@ import "server-only";
 import { z } from "zod";
 
 import { auth } from "@/lib/auth";
-import { COLORS, MATERIALS, TIPS, WishSchema } from "@/lib/catalog";
+import { MATERIALS, TIPS, WishSchema } from "@/lib/catalog";
 import { ACCEPTED_EXTENSIONS, MAX_BYTES, formatBytes } from "@/lib/models";
 import { FLOW } from "@/lib/scope";
 import { BodySchema, LIST_LIMIT_DEFAULT, LIST_LIMIT_MAX, ReasonSchema } from "@/lib/stories";
@@ -95,12 +95,22 @@ const STORY_SCHEMA = {
     quantity: { type: "integer", minimum: 1 },
     material: { type: "string", enum: [...MATERIALS] },
     color: {
-      type: "object",
-      properties: {
-        name: { type: "string", enum: COLORS.map((c) => c.name) },
-        hex: { type: "string", examples: ["#4a5d78"] },
-      },
+  type: "object",
+  properties: {
+    name: {
+      type: "string",
+      description:
+        "The filament selected when the request was created. " +
+        "Choices are supplied dynamically by Spoolman.",
+      examples: ["Silk+ PLA – Candy Red"],
     },
+    hex: {
+      type: "string",
+      pattern: "^#[0-9A-Fa-f]{6}$",
+      examples: ["#D02727"],
+    },
+  },
+},
     tip: { type: "string", enum: [...TIPS] },
     note: { type: "string" },
     file: {
@@ -757,9 +767,9 @@ export async function buildOpenApiDocument() {
           summary: "Upload a model and open a request",
           description:
             `Multipart, because it carries up to ${formatBytes(MAX_BYTES)} of ` +
-            `geometry. ${ACCEPTED_EXTENSIONS.join(" and ")} only, and the ` +
-            "decision is made on the **bytes**, not the filename — an STL " +
-            "renamed `.3mf` is refused, and so is anything that is neither.\n\n" +
+            `geometry. Supported formats: ${ACCEPTED_EXTENSIONS.join(", ")}. The ` +
+            "decision is made on the **bytes**, not the filename — renaming an STL " +
+            "to `.3mf` or `.obj`, for example, does not make it one.\n\n" +
             "Order matters: nothing reaches storage until the file has been " +
             "inspected, and no ticket exists until the object is in place. A " +
             "refused upload therefore leaves nothing behind.\n\n" +
