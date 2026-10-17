@@ -1,0 +1,28 @@
+# Standalone AD5X conversion test service.
+# Usage:
+#   docker compose -f docker-compose.3mf.yml run --rm converter \
+#     /work/input.3mf /work/result --template /templates/ad5x.3mf
+# Place the converter engine (bambu2ad5x.py) at ./data/converter/engine/
+# and the custom OrcaSlicer template at ./data/converter/templates/.
+services:
+  converter:
+    build:
+      context: .
+      dockerfile: services/3mf-converter/Dockerfile
+    network_mode: none
+    read_only: true
+    user: "65534:65534"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 64
+    mem_limit: 768m
+    volumes:
+      - ./data/converter/engine:/engine:ro
+      - ./data/converter/templates:/templates:ro
+      - ./data/converter/work:/work
+    tmpfs:
+      - /tmp:size=512m,mode=1777
+    entrypoint: ["python3", "/app/convert.py"]
+    command: ["/work/input.3mf", "/work/result", "--template", "/templates/ad5x.3mf", "--engine", "/engine/bambu2ad5x.py"]
