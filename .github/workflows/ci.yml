@@ -221,6 +221,17 @@ jobs:
         run: python3 -m unittest discover -s services/3mf-converter -p 'test_*.py' -v
       - name: Build non-root AD5X conversion worker with pinned engine
         run: docker build --target ad5x-worker -t ppp-ad5x-worker:ci .
+      - name: Validate isolated staging Compose overlay
+        run: |
+          cp .env.docker.example .env.docker
+          docker compose -p ppp-ad5x-staging --env-file .env.docker \
+            -f docker-compose.prod.yml -f docker-compose.build.yml \
+            -f docker-compose.ad5x.yml -f docker-compose.ad5x.staging.yml \
+            --profile mailcatcher config --quiet
+          docker compose -p ppp-ad5x-staging --env-file .env.docker \
+            -f docker-compose.prod.yml -f docker-compose.build.yml \
+            -f docker-compose.ad5x.yml -f docker-compose.ad5x.staging.yml \
+            --profile mailcatcher config --services | grep -qx ad5x-worker
 
   trivy:
     runs-on: ubuntu-latest
