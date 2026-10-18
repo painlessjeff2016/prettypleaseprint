@@ -220,7 +220,8 @@ new_sandbox() {
   : >"$T/stub/log"
   echo '{"nameWithOwner":"octo/widgets"}' >"$T/stub/state/repo.json"
   printf '%s\n' ghcr.io/octo/ppp-app:v0.2.0 ghcr.io/octo/ppp-migrate:v0.2.0 \
-    ghcr.io/octo/ppp-storage-migrate:v0.2.0 >"$T/stub/state/images"
+    ghcr.io/octo/ppp-storage-migrate:v0.2.0 \
+    ghcr.io/octo/ppp-ad5x-worker:v0.2.0 >"$T/stub/state/images"
   echo '[{"status":"completed","conclusion":"success","url":"https://github.invalid/runs/1","createdAt":"2026-11-01T10:00:00Z"}]' \
     >"$T/stub/state/runs-ci.yml.json"
   echo '[{"status":"completed","conclusion":"success","headBranch":"v0.2.0","event":"push","url":"https://github.invalid/runs/2","createdAt":"2026-11-01T10:05:00Z"},
@@ -530,9 +531,9 @@ t "15 the pull request is polled while open, and the wizard goes on once it is m
 eq "polls of the pull request, at least 3" "$([ "$(grep -c '^gh pr list .*--head release-0.2.0' "$T/stub/log")" -ge 3 ] && echo yes)" "yes"
 out "waiting for #7 to be merged — the owner merges, this tool never does."; out "#7 is merged"
 
-t "30 the images waited for are exactly the three the real workflow publishes"
+t "30 the images waited for are exactly the four the real workflow publishes"
 eq "images" "$(grep '^docker buildx imagetools inspect' "$T/stub/log" | awk '{print $5}' | sort -u | tr '\n' ' ')" \
-  "ghcr.io/octo/ppp-app:v0.2.0 ghcr.io/octo/ppp-migrate:v0.2.0 ghcr.io/octo/ppp-storage-migrate:v0.2.0 "
+  "ghcr.io/octo/ppp-ad5x-worker:v0.2.0 ghcr.io/octo/ppp-app:v0.2.0 ghcr.io/octo/ppp-migrate:v0.2.0 ghcr.io/octo/ppp-storage-migrate:v0.2.0 "
 
 t "14 a tracked file changed besides the five is asked about; no stops with nothing pushed"
 new_sandbox; SEAM="leave-stray"
@@ -867,7 +868,7 @@ new_sandbox; : >"$T/stub/state/images"; EXTRA=(PPP_IMAGES_TIMEOUT=1)
 wiz "$HAPPY" 0.2.0
 rc 1; ok "the tag on the remote" remote_has refs/tags/v0.2.0
 tag0="$(git -C "$T/remote.git" rev-parse refs/tags/v0.2.0)"; EXTRA=(); clear_log
-printf '%s\n' ghcr.io/octo/ppp-app:v0.2.0 ghcr.io/octo/ppp-migrate:v0.2.0 ghcr.io/octo/ppp-storage-migrate:v0.2.0 >"$T/stub/state/images"
+printf '%s\n' ghcr.io/octo/ppp-app:v0.2.0 ghcr.io/octo/ppp-migrate:v0.2.0 ghcr.io/octo/ppp-storage-migrate:v0.2.0 ghcr.io/octo/ppp-ad5x-worker:v0.2.0 >"$T/stub/state/images"
 git -C "$T/work" switch -q main
 wiz 'n\ny\n' --continue 0.2.0
 rc 0; logged 'release create v0\.2\.0'; not_logged 'pr create'
@@ -1042,7 +1043,7 @@ rc 1; out "--dry-run is for a fresh start only"
 t "29 nothing about the repository is hard-coded"
 new_sandbox
 echo '{"nameWithOwner":"SomeOne/fork"}' >"$T/stub/state/repo.json"
-printf '%s\n' ghcr.io/someone/ppp-app:v0.2.0 ghcr.io/someone/ppp-migrate:v0.2.0 ghcr.io/someone/ppp-storage-migrate:v0.2.0 >"$T/stub/state/images"
+printf '%s\n' ghcr.io/someone/ppp-app:v0.2.0 ghcr.io/someone/ppp-migrate:v0.2.0 ghcr.io/someone/ppp-storage-migrate:v0.2.0 ghcr.io/someone/ppp-ad5x-worker:v0.2.0 >"$T/stub/state/images"
 wiz "$HAPPY" 0.2.0
 rc 0
 eq "gh calls without --repo SomeOne/fork" \
