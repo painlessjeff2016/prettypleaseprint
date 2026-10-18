@@ -629,8 +629,11 @@ case_13_sha_to_sha_matches_the_golden_transcript() {
   golden_run
   # The table header is the one line allowed to differ: it gained a column.
   local golden="$FIX/golden-sha-to-sha.stdout"
-  grep -v '^   *#   tag ' "$SB/out.norm" >"$SB/now.txt"
-  grep -v '^   *#   tag ' "$golden" >"$SB/then.txt"
+  # Bash versions can differ in whether non-interactive read prompts emit
+  # a trailing blank. Compare the words and structure strictly, but not this
+  # terminal-only whitespace; keep Docker calls and .env byte-exact below.
+  grep -v '^   *#   tag ' "$SB/out.norm" | sed 's/[[:blank:]]*$//' >"$SB/now.txt"
+  grep -v '^   *#   tag ' "$golden" | sed 's/[[:blank:]]*$//' >"$SB/then.txt"
   [ "$(wc -l <"$SB/then.txt")" -eq "$(( $(wc -l <"$golden") - 1 ))" ] \
     || fail "the header filter did not remove exactly one line of the golden transcript"
   cmp -s "$SB/now.txt" "$SB/then.txt" \
