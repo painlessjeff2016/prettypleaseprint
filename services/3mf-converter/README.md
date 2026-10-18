@@ -14,8 +14,28 @@ Also place the engine's bundled `ad5x_template.json` next to `bambu2ad5x.py`.
 These are the program's unmodified default printer settings.
 Do not commit personal profiles, authentication tokens or passwords to Git.
 
-Create `data/converter/work` and grant UID 65534 write permissions.
+Create `data/converter/work/result` and make sure the container's numeric
+UID/GID can write there. The Compose test service defaults to `1000:1000`,
+matching a typical Debian desktop user; unlike a hardcoded `nobody` account,
+these IDs can be overridden using `CONVERTER_UID` and `CONVERTER_GID`.
+
+If you previously changed ownership to UID 65534 while testing, restore it
+on **only** the test workspace (never on PPP's production uploads):
+
+```sh
+mkdir -p data/converter/work/result
+sudo chown -R "$(id -u):$(id -g)" data/converter/work
+```
+
 Put a model to test at `data/converter/work/input.3mf`.
+On hosts where your account isn't UID 1000, set the variables for each Compose
+command, for example:
+
+```sh
+CONVERTER_UID="$(id -u)" CONVERTER_GID="$(id -g)" \
+  docker compose -p ppp-3mf -f docker-compose.3mf.yml run --rm converter
+```
+
 
 Then run from the repository root:
 
