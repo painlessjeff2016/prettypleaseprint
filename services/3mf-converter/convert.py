@@ -3,7 +3,7 @@
 
 Usage:
   python3 services/3mf-converter/convert.py /work/input.3mf /work/result \
-      --template /templates/ad5x.3mf --engine /engine/bambu2ad5x.py
+      --engine /engine/bambu2ad5x.py
 
 Writes result/converted.3mf and result/conversion.report.txt on success.
 Output is only published after validation. Never touches the source archive.
@@ -44,18 +44,18 @@ def check_archive(path: Path) -> None:
             raise ValueError("Archive is missing 3MF content types")
 
 
-def convert(src: Path, destination: Path, template: Path, engine: Path, timeout: int) -> None:
-    if not template.is_file() or template.suffix.lower() not in (".3mf", ".json"):
-        raise ValueError("Custom AD5X template (.3mf or .json) is required")
+def convert(src: Path, destination: Path, engine: Path, timeout: int) -> None:
     if not engine.is_file():
         raise ValueError("Converter engine not found")
+    if not (engine.parent / "ad5x_template.json").is_file():
+        raise ValueError("Bundled ad5x_template.json must be beside the engine")
     check_archive(src)
     destination.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="ppp-3mf-") as tmp:
         temporary = Path(tmp)
         output = temporary / "converted.3mf"
         result = subprocess.run(
-            [sys.executable, str(engine), str(src), "--template", str(template),
+            [sys.executable, str(engine), str(src),
              "--output", str(output), "--report"],
             cwd=str(temporary), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             text=True, timeout=timeout, check=False,
@@ -79,7 +79,6 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("input", type=Path)
     parser.add_argument("destination", type=Path)
-    parser.add_argument("--template", type=Path, required=True)
     parser.add_argument("--engine", type=Path, required=True)
     parser.add_argument("--timeout", type=int, default=180)
     args = parser.parse_args()
@@ -87,7 +86,7 @@ def main() -> int:
         parser.error("--timeout must be between 1 and 900 seconds")
     try:
         convert(args.input.resolve(), args.destination.resolve(),
-                args.template.resolve(), args.engine.resolve(), args.timeout)
+                args.engine.resolve(), args.timeout)
     except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired, zipfile.BadZipFile) as exc:
         print(f"3MF conversion failed: {exc}", file=sys.stderr)
         return 1
