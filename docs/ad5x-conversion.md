@@ -1,7 +1,7 @@
 # Automatic AD5X project conversion (opt-in)
 
 This feature automatically creates an **additional** Flashforge AD5X project for new
-3MF print requests, including files imported from Printables. Originals remain
+3MF print requests, including files imported from Printables and requeued requests. Originals remain
 attached to their requests. STL/OBJ requests are unchanged.
 
 The default upstream AD5X machine profile (`ad5x_template.json`) is used.
@@ -112,8 +112,9 @@ This uses the normal PPP Compose project (unlike the standalone test service's
   ignores the new table. Keep migration/DB compatible with PPP's release wizard.
 - **Admin only:** converted assets are not sent to requesters automatically.
 - **No backfill:** previously uploaded 3MFs get no conversion job.
-- **No garbage collection yet:** deleting a ticket cascades its job record,
-  but generated files need eventual deletion/cleanup just like originals.
+- **Cleanup:** withdrawing a ticket removes its original file and its
+  generated conversion directory. A failed in-flight job also removes partial
+  output. A separate periodic orphan-file sweep is not implemented yet.
 - **No retries yet:** invalid/unsupported files show `failed`; recovery of
   interrupted jobs uses a 15-minute staleness threshold.
 - **Engine prerequisites:** a missing upstream engine or its default template
