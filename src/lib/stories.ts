@@ -15,7 +15,7 @@ import {
   storyScope,
   type Actor,
 } from "@/lib/scope";
-import { copyModel, deleteModel, storageKeyFor } from "@/lib/storage";
+import { copyModel, deleteConversionArtifacts, deleteModel, storageKeyFor } from "@/lib/storage";
 import { extensionOf } from "@/lib/models";
 import {
   newCommentEmail,
@@ -597,6 +597,7 @@ export async function withdrawStory(actor: Actor, id: number) {
     select: {
       id: true, title: true, status: true, storageKey: true,
       uploaderId: true, uploader: { select: { name: true } },
+      conversion: { select: { id: true } },
     },
   });
   if (!story) throw problem(404, "That ticket no longer exists.");
@@ -631,6 +632,13 @@ export async function withdrawStory(actor: Actor, id: number) {
     await deleteModel(story.storageKey);
   } catch (error) {
     console.error(`[withdraw] ${ref}: object ${story.storageKey} not removed`, error);
+  }
+  if (story.conversion) {
+    try {
+      await deleteConversionArtifacts(story.id, story.conversion.id);
+    } catch (error) {
+      console.error(`[withdraw] ${ref}: conversion artifacts not removed`, error);
+    }
   }
 
   // Tell the printer owner when they had it in hand — a request still waiting
@@ -771,6 +779,10 @@ export async function requeueStory(
       // The same model from the same place; a reprint did not stop having come
       // from there.
       sourceUrl: src.sourceUrl,
+      // A repeated 3MF request receives its own independent converted copy.
+      ...(extensionOf(src.filename) === ".3mf" && process.env.AD5X_AUTOCONVERT === "true"
+        ? { conversion: { create: { status: "pending" } } }
+        : {}),
     },
     select: { id: true },
   });
