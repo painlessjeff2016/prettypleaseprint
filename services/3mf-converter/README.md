@@ -3,16 +3,16 @@
 This phase is isolated from PPP's application, database, and production Docker services.
 Automatic upload conversion is **not yet active**.
 
-## Setup
+## Setup (built-in AD5X defaults)
 
 Use a pinned/reviewed copy of the MIT-licensed
 [iChristGit/3MF-to-AD5X](https://github.com/iChristGit/3MF-to-AD5X)
 engine. Place its `bambu2ad5x.py` at
 `data/converter/engine/bambu2ad5x.py`.
 
-Export an AD5X project from your own OrcaSlicer setup and save it as
-`data/converter/templates/ad5x.3mf`. Do not commit personal profiles,
-authentication tokens or machine passwords to Git.
+Also place the engine's bundled `ad5x_template.json` next to `bambu2ad5x.py`.
+These are the program's unmodified default printer settings.
+Do not commit personal profiles, authentication tokens or passwords to Git.
 
 Create `data/converter/work` and grant UID 65534 write permissions.
 Put a model to test at `data/converter/work/input.3mf`.
