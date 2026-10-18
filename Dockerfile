@@ -211,13 +211,18 @@ CMD ["node", "server.js"]
 
 
 # ---------------------------------------------------------------------------
-# Persistent AD5X conversion worker. Built on the migrator's small Prisma
-# toolchain so no Python DB drivers, shell access to Docker, or Next runtime
-# are needed. The converter itself remains a separately mounted upstream copy.
+# Persistent AD5X conversion worker. Bundles the exact verified fork
+# revision, including HueForge layer-switch preservation and the owner's
+# Flashforge AD5X/ZMOD machine template. No network access is needed at run
+# time and the engine cannot drift when a Git branch moves.
 FROM migrator AS ad5x-worker
-RUN apk add --no-cache python3
+RUN apk add --no-cache python3 ca-certificates
 COPY scripts/3mf-worker.ts ./scripts/3mf-worker.ts
 COPY services/3mf-converter/convert.py /app/convert.py
+COPY services/3mf-converter/fetch-engine.py /app/fetch-engine.py
+RUN python3 /app/fetch-engine.py /engine \
+ && chmod -R a+rX /engine \
+ && rm /app/fetch-engine.py
 ENV MODELS_ROOT=/uploads PYTHONDONTWRITEBYTECODE=1 TMPDIR=/tmp
 USER 1001:1001
 CMD ["./node_modules/.bin/tsx", "scripts/3mf-worker.ts"]
