@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import shutil
 from pathlib import Path
 import subprocess
 import sys
@@ -70,9 +71,39 @@ def convert(src: Path, destination: Path, engine: Path, timeout: int) -> None:
         for name in ("converted.3mf", "conversion.report.txt"):
             if (destination / name).exists():
                 raise FileExistsError(f"artifact already exists: {name}")
-        # Move completed artifacts from temporary workspace, never modify src.
-        os.replace(output, destination / "converted.3mf")
-        os.replace(report, destination / "conversion.report.txt")
+        # /tmp is tmpfs, but /work is a bind mount. os.replace() across
+        # these filesystems raises EXDEV. First stage *both* complete files
+        # under the destination mount, then rename them within that mount.
+        # Staging files aren't exposed as finished artifacts.
+        artifacts = ((output, "converted.3mf"),
+                     (report, "conversion.report.txt"))
+        with tempfile.TemporaryDirectory(prefix=".ppp-stage-", dir=destination) as stage_dir:
+            stage = Path(stage_dir)
+            for source, name in artifacts:
+                staged = stage / name
+                shutil.copyfile(source, staged)
+                with staged.open("rb") as handle:
+                    os.fsync(handle.fileno())
+
+            published = []
+            try:
+                for _, name in artifacts:
+                    final = destination / name
+                    # Job-specific output directory: do not overwrite reruns.
+                    if final.exists():
+                        raise FileExistsError(f"artifact already exists: {name}")
+                    os.replace(stage / name, final)
+                    published.append(final)
+                directory_fd = os.open(destination, os.O_RDONLY)
+                try:
+                    os.fsync(directory_fd)
+                finally:
+                    os.close(directory_fd)
+            except OSError:
+                # Don't leave half a result if publication fails mid-run.
+                for final in published:
+                    final.unlink(missing_ok=True)
+                raise
 
 
 def main() -> int:
