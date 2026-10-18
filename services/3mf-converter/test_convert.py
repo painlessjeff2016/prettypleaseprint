@@ -54,11 +54,11 @@ class ConverterSmokeTests(unittest.TestCase):
             sample_3mf(source)
             (root / "ad5x_template.json").write_text("{}")
             engine.write_text(
-                "from pathlib import Path\\n"
-                "import shutil, sys\\n"
-                "out = Path(sys.argv[sys.argv.index('--output') + 1])\\n"
-                "shutil.copyfile(sys.argv[1], out)\\n"
-                "Path(str(out) + '.report.txt').write_text('report')\\n"
+                "from pathlib import Path\n"
+                "import shutil, sys\n"
+                "out = Path(sys.argv[sys.argv.index('--output') + 1])\n"
+                "shutil.copyfile(sys.argv[1], out)\n"
+                "Path(str(out) + '.report.txt').write_text('report')\n"
             )
 
             original_replace = adapter.os.replace
