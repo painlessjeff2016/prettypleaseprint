@@ -43,6 +43,7 @@ export type AuditAction =
   | "story.flag_cleared"
   | "comment.added"
   | "file.downloaded"
+  | "conversion.downloaded"
   | "file.refused"
   // catalog
   | "catalog.material_added"

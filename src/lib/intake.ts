@@ -146,6 +146,12 @@ const title = wish.title || filename.replace(/\.(stl|3mf|obj)$/i, "");
         storageKey: key,
         dims: inspection.dims,
         sourceUrl: origin?.url ?? null,
+        // A single durable job is committed with the story. No background
+        // process is launched from the HTTP request, and the original file
+        // remains Story.storageKey whether conversion succeeds or fails.
+        ...(extension === ".3mf" && process.env.AD5X_AUTOCONVERT === "true"
+          ? { conversion: { create: { status: "pending" } } }
+          : {}),
       },
     });
   } catch (error) {

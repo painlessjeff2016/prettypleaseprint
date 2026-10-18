@@ -154,6 +154,21 @@ export async function copyModel(srcKey: string, destKey: string): Promise<void> 
   });
 }
 
+/**
+ * Remove the generated files for one deleted conversion job.
+ * Unlike a generic recursive delete, this accepts only a positive story id
+ * and Prisma's generated CUID. Never accepts caller-supplied filesystem paths.
+ */
+export async function deleteConversionArtifacts(storyId: number, jobId: string): Promise<void> {
+  if (!Number.isSafeInteger(storyId) || storyId <= 0 || !/^[a-z0-9]+$/.test(jobId)) {
+    throw new Error("Invalid conversion artifact identifier");
+  }
+  await rm(pathFor(`conversions/${storyId}/${jobId}`), {
+    recursive: true,
+    force: true,
+  });
+}
+
 export const MIME_FOR: Record<string, string> = {
   ".stl": "model/stl",
   ".3mf": "model/3mf",

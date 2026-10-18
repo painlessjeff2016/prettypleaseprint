@@ -208,3 +208,21 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
   CMD node -e "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 
 CMD ["node", "server.js"]
+
+
+# ---------------------------------------------------------------------------
+# Persistent AD5X conversion worker. Bundles the exact verified fork
+# revision, including HueForge layer-switch preservation and the owner's
+# Flashforge AD5X/ZMOD machine template. No network access is needed at run
+# time and the engine cannot drift when a Git branch moves.
+FROM migrator AS ad5x-worker
+RUN apk add --no-cache python3 ca-certificates
+COPY scripts/3mf-worker.ts ./scripts/3mf-worker.ts
+COPY services/3mf-converter/convert.py /app/convert.py
+COPY services/3mf-converter/fetch-engine.py /app/fetch-engine.py
+RUN python3 /app/fetch-engine.py /engine \
+ && chmod -R a+rX /engine \
+ && rm /app/fetch-engine.py
+ENV MODELS_ROOT=/uploads PYTHONDONTWRITEBYTECODE=1 TMPDIR=/tmp
+USER 1001:1001
+CMD ["./node_modules/.bin/tsx", "scripts/3mf-worker.ts"]

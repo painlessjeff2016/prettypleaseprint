@@ -1,0 +1,51 @@
+# Optional production / staging overlay. Use alongside prod.yml for published images; add build.yml only for source builds.
+# This worker has no published ports. Do not use with -p ppp-3mf: this is
+# part of the same Compose project as PPP's app and database.
+#
+# Staging example with prebuilt images:
+# docker compose --env-file .env.docker \
+#   -f docker-compose.prod.yml -f docker-compose.ad5x.yml up -d
+#
+# Worker image bundles a pinned, reviewed 3MF-to-AD5X engine at build time.
+services:
+  db:
+    # PPP's app still uses default networking; the converter may only reach
+    # Postgres over this extra private network.
+    networks:
+      - default
+      - ad5x_internal
+
+  app:
+    environment:
+      AD5X_AUTOCONVERT: "true"
+
+  ad5x-worker:
+    image: ${PPP_REGISTRY:-ghcr.io/danileau}/ppp-ad5x-worker:${PPP_TAG:-latest}
+    container_name: ppp-ad5x-worker
+    restart: unless-stopped
+    user: "1001:1001"
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 64
+    mem_limit: 768m
+    tmpfs:
+      - /tmp:size=512m,mode=1777
+    networks:
+      - ad5x_internal
+    environment:
+      DATABASE_URL: postgresql://ppp:${DB_PASSWORD:?set DB_PASSWORD}@db:5432/ppp?schema=public
+      MODELS_ROOT: /uploads
+    volumes:
+      - ${DATA_ROOT:-./data}/uploads:/uploads
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+networks:
+  ad5x_internal:
+    internal: true

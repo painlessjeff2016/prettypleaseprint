@@ -342,10 +342,31 @@ model Story {
 
   comments      Comment[]
   notifications Notification[]
+  conversion    ModelConversion?
 
   @@index([uploaderId])
   @@index([status])
   @@map("story")
+}
+
+/// One durable AD5X conversion job per print request.
+/// Pending jobs are claimed by the isolated worker, never by the upload request.
+/// The original Story.storageKey remains authoritative and is never replaced.
+model ModelConversion {
+  id               String   @id @default(cuid())
+  storyId          Int      @unique
+  story            Story    @relation(fields: [storyId], references: [id], onDelete: Cascade)
+  status           String   @default("pending")
+  attempts         Int      @default(0)
+  outputStorageKey String?
+  reportStorageKey String?
+  errorMessage     String?
+  createdAt        DateTime @default(now())
+  startedAt        DateTime?
+  completedAt      DateTime?
+
+  @@index([status, createdAt])
+  @@map("modelConversion")
 }
 
 /// A material the printer owner can currently offer. Disabling an entry only
