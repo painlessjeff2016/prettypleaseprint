@@ -1,0 +1,38 @@
+# Extra isolation for testing the AD5X integration in a separate checkout.
+#
+# Combine with:
+# docker compose -p ppp-ad5x-staging --env-file .env.docker \
+#   -f docker-compose.prod.yml -f docker-compose.build.yml \
+#   -f docker-compose.ad5x.yml -f docker-compose.ad5x.staging.yml \
+#   --profile mailcatcher up -d --build
+#
+# Never use on the live PPP checkout. Use a distinct .env.docker with
+# DATA_ROOT=./data-ad5x-staging and APP_URL=http://localhost:4111.
+#
+# The base production Compose files set fixed container_name values. Merely
+# changing '-p' does NOT isolate them; override every name here.
+services:
+  cloudflared:
+    profiles:
+      - staging-cloudflared-disabled
+    container_name: ppp-ad5x-staging-cloudflared
+
+  db:
+    container_name: ppp-ad5x-staging-db
+    # No Postgres host port in this staging stack.
+
+  migrate:
+    container_name: ppp-ad5x-staging-migrate
+
+  app:
+    container_name: ppp-ad5x-staging-app
+    ports:
+      - "127.0.0.1:${APP_PORT:-4111}:3000"
+
+  ad5x-worker:
+    container_name: ppp-ad5x-staging-worker
+
+  mailpit:
+    container_name: ppp-ad5x-staging-mailpit
+    ports:
+      - "127.0.0.1:${MAILPIT_UI_PORT:-8115}:8025"
