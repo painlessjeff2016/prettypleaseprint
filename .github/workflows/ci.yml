@@ -213,12 +213,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - name: Converter adapter regression tests
+      - name: Fetch and checksum pinned HueForge-safe converter
+        run: python3 services/3mf-converter/fetch-engine.py "$RUNNER_TEMP/ad5x-engine"
+      - name: Adapter and full HueForge conversion regression tests
+        env:
+          AD5X_ENGINE_DIR: ${{ runner.temp }}/ad5x-engine
         run: python3 -m unittest discover -s services/3mf-converter -p 'test_*.py' -v
-      - name: Build non-root AD5X conversion worker
+      - name: Build non-root AD5X conversion worker with pinned engine
         run: docker build --target ad5x-worker -t ppp-ad5x-worker:ci .
-      # The runtime engine is mounted from a reviewed upstream checkout,
-      # not downloaded during build or included in the image.
 
   trivy:
     runs-on: ubuntu-latest
