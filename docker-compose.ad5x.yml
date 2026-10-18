@@ -1,0 +1,47 @@
+# Optional production / staging overlay. Use alongside prod.yml and build.yml.
+# This worker has no published ports. Do not use with -p ppp-3mf: this is
+# part of the same Compose project as PPP's app and database.
+#
+# Example:
+# docker compose --env-file .env.docker \
+#   -f docker-compose.prod.yml -f docker-compose.build.yml \
+#   -f docker-compose.ad5x.yml --profile ad5x up -d --build
+#
+# The worker requires both bambu2ad5x.py and ad5x_template.json under
+# ${DATA_ROOT:-./data}/converter/engine, reviewed from upstream.
+services:
+  app:
+    environment:
+      AD5X_AUTOCONVERT: "true"
+
+  ad5x-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: ad5x-worker
+    image: ppp-ad5x-worker:local
+    container_name: ppp-ad5x-worker
+    profiles: ["ad5x"]
+    restart: unless-stopped
+    user: "1001:1001"
+    read_only: true
+    network_mode: null
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 64
+    mem_limit: 768m
+    tmpfs:
+      - /tmp:size=512m,mode=1777
+    environment:
+      DATABASE_URL: postgresql://ppp:${DB_PASSWORD:?set DB_PASSWORD}@db:5432/ppp?schema=public
+      MODELS_ROOT: /uploads
+    volumes:
+      - ${DATA_ROOT:-./data}/uploads:/uploads
+      - ${DATA_ROOT:-./data}/converter/engine:/engine:ro
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
