@@ -1,10 +1,12 @@
 """Offline smoke tests for the adapter, without a live printer or upstream engine."""
+import errno
 import importlib.util
 from pathlib import Path
 import sys
 import tempfile
 import unittest
 import zipfile
+from unittest.mock import patch
 
 SCRIPT = Path(__file__).with_name("convert.py")
 spec = importlib.util.spec_from_file_location("converter_adapter", SCRIPT)
@@ -40,6 +42,37 @@ class ConverterSmokeTests(unittest.TestCase):
             self.assertEqual(source.read_bytes(), before)
             self.assertEqual((output / "converted.3mf").read_bytes(), before)
             self.assertIn("test conversion report", (output / "conversion.report.txt").read_text())
+
+    def test_publishes_without_cross_device_rename(self):
+        # Docker uses /tmp as tmpfs and /work as a host-mounted filesystem.
+        # Emulate EXDEV when the rename source is outside the output mount.
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "input.3mf"
+            output = root / "result"
+            engine = root / "fake_engine.py"
+            sample_3mf(source)
+            (root / "ad5x_template.json").write_text("{}")
+            engine.write_text(
+                "from pathlib import Path\\n"
+                "import shutil, sys\\n"
+                "out = Path(sys.argv[sys.argv.index('--output') + 1])\\n"
+                "shutil.copyfile(sys.argv[1], out)\\n"
+                "Path(str(out) + '.report.txt').write_text('report')\\n"
+            )
+
+            original_replace = adapter.os.replace
+
+            def rename_if_same_mount(src, dst):
+                if not Path(src).is_relative_to(output):
+                    raise OSError(errno.EXDEV, "Invalid cross-device link")
+                return original_replace(src, dst)
+
+            with patch.object(adapter.os, "replace", side_effect=rename_if_same_mount):
+                adapter.convert(source, output, engine, timeout=10)
+
+            self.assertEqual((output / "converted.3mf").read_bytes(), source.read_bytes())
+            self.assertEqual((output / "conversion.report.txt").read_text(), "report")
 
     def test_reject_invalid_archive(self):
         with tempfile.TemporaryDirectory() as temporary:
