@@ -20,8 +20,8 @@ Put a model to test at `data/converter/work/input.3mf`.
 Then run from the repository root:
 
 ```sh
-docker compose -f docker-compose.3mf.yml build
-docker compose -f docker-compose.3mf.yml run --rm converter
+docker compose -p ppp-3mf -f docker-compose.3mf.yml build converter
+docker compose -p ppp-3mf -f docker-compose.3mf.yml run --rm converter
 ```
 
 Expected outputs:
@@ -29,6 +29,12 @@ Expected outputs:
 - `data/converter/work/result/conversion.report.txt`
 
 Each run needs a fresh result directory. Original input is left unchanged.
+The adapter copies output from Docker's `/tmp` tmpfs into a staging
+directory *inside* `/work/result` before atomically renaming the two
+artifacts. That avoids Linux EXDEV ("Invalid cross-device link") errors.
+After changing the adapter, **rebuild** the image before rerunning.
+The `-p ppp-3mf` flag avoids treating production PPP containers as orphans;
+do not use `--remove-orphans` with the regular PPP Compose project.
 Open the resulting project in OrcaSlicer and inspect filament mapping, prime
 tower, purge behavior, supports, and machine G-code **before printing**.
 
