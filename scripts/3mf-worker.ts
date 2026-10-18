@@ -129,6 +129,18 @@ async function main() {
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           console.error(`[ad5x] story ${job.storyId} failed: ${message}`);
+          // If a ticket was withdrawn during conversion, its DB row has
+          // cascaded away; remove any output written after withdrawal.
+          // Also clean up partial output from ordinary conversion failures.
+          try {
+            if (/^[a-z0-9]+$/.test(job.id) && Number.isSafeInteger(job.storyId) && job.storyId > 0) {
+              await rm(safePath(`conversions/${job.storyId}/${job.id}`), {
+                recursive: true, force: true,
+              });
+            }
+          } catch (cleanupError) {
+            console.error("[ad5x] couldn't clean partial artifacts", cleanupError);
+          }
           try {
             await db.modelConversion.update({
               where: { id: job.id },
