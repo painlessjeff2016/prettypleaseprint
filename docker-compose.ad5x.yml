@@ -5,11 +5,18 @@
 # Example:
 # docker compose --env-file .env.docker \
 #   -f docker-compose.prod.yml -f docker-compose.build.yml \
-#   -f docker-compose.ad5x.yml --profile ad5x up -d --build
+#   -f docker-compose.ad5x.yml up -d --build
 #
 # The worker requires both bambu2ad5x.py and ad5x_template.json under
 # ${DATA_ROOT:-./data}/converter/engine, reviewed from upstream.
 services:
+  db:
+    # PPP's app still uses default networking; the converter may only reach
+    # Postgres over this extra private network.
+    networks:
+      - default
+      - ad5x_internal
+
   app:
     environment:
       AD5X_AUTOCONVERT: "true"
@@ -21,11 +28,9 @@ services:
       target: ad5x-worker
     image: ppp-ad5x-worker:local
     container_name: ppp-ad5x-worker
-    profiles: ["ad5x"]
     restart: unless-stopped
     user: "1001:1001"
     read_only: true
-    network_mode: null
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -34,6 +39,8 @@ services:
     mem_limit: 768m
     tmpfs:
       - /tmp:size=512m,mode=1777
+    networks:
+      - ad5x_internal
     environment:
       DATABASE_URL: postgresql://ppp:${DB_PASSWORD:?set DB_PASSWORD}@db:5432/ppp?schema=public
       MODELS_ROOT: /uploads
@@ -45,3 +52,7 @@ services:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
+
+networks:
+  ad5x_internal:
+    internal: true
