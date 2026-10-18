@@ -24,11 +24,10 @@ class ConverterSmokeTests(unittest.TestCase):
             root = Path(temporary)
             source = root / "input.3mf"
             output = root / "result"
-            template = root / "ad5x.3mf"
             engine = root / "fake_engine.py"
             sample_3mf(source)
-            sample_3mf(template)
             before = source.read_bytes()
+            (root / "ad5x_template.json").write_text("{}")
             engine.write_text(
                 "from pathlib import Path\n"
                 "import shutil, sys\n"
@@ -37,7 +36,7 @@ class ConverterSmokeTests(unittest.TestCase):
                 "shutil.copyfile(source, out)\n"
                 "Path(str(out) + '.report.txt').write_text('test conversion report')\n"
             )
-            adapter.convert(source, output, template, engine, timeout=10)
+            adapter.convert(source, output, engine, timeout=10)
             self.assertEqual(source.read_bytes(), before)
             self.assertEqual((output / "converted.3mf").read_bytes(), before)
             self.assertIn("test conversion report", (output / "conversion.report.txt").read_text())
@@ -56,10 +55,9 @@ class ConverterSmokeTests(unittest.TestCase):
             target = root / "result"
             target.mkdir()
             (target / "converted.3mf").write_bytes(b"existing")
-            template = root / "ad5x.3mf"
             engine = root / "fake_engine.py"
             sample_3mf(source)
-            sample_3mf(template)
+            (root / "ad5x_template.json").write_text("{}")
             engine.write_text(
                 "from pathlib import Path\n"
                 "import shutil, sys\n"
@@ -68,7 +66,7 @@ class ConverterSmokeTests(unittest.TestCase):
                 "Path(str(out) + '.report.txt').write_text('report')\n"
             )
             with self.assertRaises(FileExistsError):
-                adapter.convert(source, target, template, engine, timeout=10)
+                adapter.convert(source, target, engine, timeout=10)
             self.assertEqual((target / "converted.3mf").read_bytes(), b"existing")
 
 
