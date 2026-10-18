@@ -89,6 +89,7 @@ async function runJob(job: { id: string; storyId: number }) {
     // Do not pass the Prisma worker's DATABASE_URL or any application secrets
     // to the third-party Python conversion engine.
     env: {
+      NODE_ENV: "production",
       PATH: process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin",
       TMPDIR: "/tmp",
       PYTHONDONTWRITEBYTECODE: "1",
