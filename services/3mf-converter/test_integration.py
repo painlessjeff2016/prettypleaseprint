@@ -58,8 +58,8 @@ class PinnedHueForgeIntegrationTests(unittest.TestCase):
             for key in ("layer_height", "initial_layer_print_height", "sparse_infill_density"):
                 self.assertEqual(new.get(key), old.get(key), key)
             self.assertEqual(new["printer_settings_id"], "Flashforge AD5X")
-            self.assertTrue(new["machine_start_gcode"].startswith("LED_ON\\nSTART_PRINT"))
-            self.assertEqual(new["machine_end_gcode"], "END_PRINT\\nLED_OFF")
+            self.assertTrue(new["machine_start_gcode"].startswith("LED_ON\nSTART_PRINT"))
+            self.assertEqual(new["machine_end_gcode"], "END_PRINT\nLED_OFF")
 
     def test_generated_hueforge_five_filaments_and_source_unchanged(self):
         settings = self.template.copy()
