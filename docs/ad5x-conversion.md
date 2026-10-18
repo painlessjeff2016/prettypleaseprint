@@ -116,6 +116,8 @@ MAILPIT_UI_PORT=8115
 ADMIN_EMAIL="staging@example.com"
 ADMIN_NAME="Staging Admin"
 DATA_ROOT="./data-ad5x-staging"
+PPP_REGISTRY="ppp-ad5x-staging"
+PPP_TAG="test"
 BETTER_AUTH_SECRET="REPLACE-WITH-NEW-SECRET"
 DB_PASSWORD="REPLACE-WITH-NEW-DB-PASSWORD"
 CLOUDFLARE_TUNNEL_TOKEN=""
@@ -125,6 +127,8 @@ The above is **an excerpt**, not a full replacement for the example
 configuration. Generate both replacement secrets with
 `openssl rand -hex 32`; keep the rest of the example file intact.
 Do not copy production authentication secrets, DB files or uploads.
+The distinct `PPP_REGISTRY`/`PPP_TAG` values also prevent a staging
+image build from overwriting tags used by a live local PPP deployment.
 
 **Before starting anything**, validate the resolved configuration:
 
