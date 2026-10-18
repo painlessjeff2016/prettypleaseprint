@@ -1,88 +1,107 @@
-# Automatic AD5X project conversion (opt-in)
+# Automatic AD5X/HueForge conversion (opt-in)
 
-This feature automatically creates an **additional** Flashforge AD5X project for new
-3MF print requests, including files imported from Printables and requeued requests. Originals remain
-attached to their requests. STL/OBJ requests are unchanged.
+PPP can automatically create a **second, derived AD5X 3MF project** for
+newly uploaded or imported 3MF print requests. The original file is never
+replaced or edited. Existing STL and OBJ behavior is unchanged.
 
-The default upstream AD5X machine profile (`ad5x_template.json`) is used.
-The converter generates a text report. Only the PPP administrator can see
-conversion status, converted project and report links on the ticket page.
+**Safety/status:** feature branch, draft PR, not a production release.
+Before enabling this on your existing PPP, test it against a disposable
+Postgres/PPP stack. The new DB migration is additive but has not been
+validated against your production database. No production deployment or
+migration has been performed by this work.
 
-**Development status:** this integration has not yet been confirmed by a full
-PPP upload test. Validate on a non-production database before deployment.
+## Converter version and printer profile
 
-## How the pipeline works
+The worker image bundles the exact **reviewed commit** of
+[painlessjeff2016/3MF-to-AD5X](https://github.com/painlessjeff2016/3MF-to-AD5X):
 
-1. `src/lib/intake.ts` writes the original into `MODELS_ROOT` and creates
-   the print request plus a pending `ModelConversion` in one DB operation.
-   The gate is `AD5X_AUTOCONVERT=true`.
-2. `scripts/3mf-worker.ts` polls Postgres, atomically claims a job, and runs
-   the Python adapter without shell interpolation.
-3. The Python adapter validates ZIP structure/limits, invokes
-   `bambu2ad5x.py --output ... --report` with bundled AD5X defaults, checks
-   the output, stages files on the upload filesystem and publishes them.
-4. The worker checks both artifacts, records their generated storage keys and
-   marks the job completed (or failed). The original is never modified.
-5. The admin sees status and download links at `/story/{id}`.
-   `/api/conversions/{id}/model` and `/api/conversions/{id}/report`
-   both enforce session/admin authentication server-side.
+`fc4042038059d501540ee16f2d03991e4c5a92b3`
 
-Interrupted `processing` jobs can be reclaimed after 15 minutes (the subprocess
-has a 180-second internal timeout). Failed jobs remain visible for diagnosis.
-Existing tickets are not backfilled, and manual retry isn't implemented yet.
+This commit contains the HueForge fix that understands per-layer
+`tool_change` commands without pruning referenced filament slots. It also
+contains the owner's complete AD5X/ZMOD template:
+`LED_ON` + `START_PRINT` at print start,
+`END_PRINT` + `LED_OFF` at print end, and
+`SET_PRINT_STATS_INFO` before each layer.
 
-## On a Debian development checkout
+`services/3mf-converter/fetch-engine.py` checks SHA-256 of the script,
+template and MIT license **during image build**. No internet download,
+GitHub credentials or writable engine mount is needed at runtime.
+A future converter update requires reviewing the commit and checksums
+together. The worker image is published alongside PPP's other images
+as `ppp-ad5x-worker` via `.github/workflows/release-images.yml`.
 
-First run the existing isolated adapter tests:
+This pinned converter still uses generic Flashforge presets by material
+type, not an exact mapping of every uploader's installed Spoolman presets.
+Color slots and layer tool changes survive; physical IFS spool assignments
+are a separate task. More than four colors require manual planning for
+the AD5X's four active IFS slots. **Do not automatically start prints
+from converted projects.** Verify them in OrcaSlicer first.
+
+## Pipeline
+
+1. `src/lib/intake.ts` creates a pending `ModelConversion` together with
+   each accepted 3MF request when `AD5X_AUTOCONVERT=true`.
+   Requeuing a 3MF can create a new job. No historical backfill.
+2. `scripts/3mf-worker.ts` claims jobs atomically via Prisma. It runs
+   `services/3mf-converter/convert.py` as a separate Python subprocess.
+   A minimal child environment deliberately excludes `DATABASE_URL`.
+3. The adapter validates ZIP limits, invokes the pinned converter with
+   `--report`, checks the result, and publishes the derived project and
+   report into a job-specific folder on the uploads volume.
+4. The worker records `completed` / `failed`. The original file remains
+   attached to the story, and only the admin sees the status and download
+   links on `/story/{id}`. The download endpoints check admin auth.
+5. The worker can reclaim stale `processing` jobs after 15 minutes.
+   There is no automatic retry of ordinary conversion failures and
+   no historical backfill. Withdrawn stories remove derived output.
+
+## Local tests (no production DB)
+
+Adapter tests (the engine-dependent tests skip when no engine path is set):
 
 ```sh
 python3 -m unittest discover -s services/3mf-converter -p 'test_*.py' -v
 ```
 
-Validate the schema and TypeScript build without touching a live database:
+Fetch the verified engine and run its full five-color regression test:
 
 ```sh
+python3 services/3mf-converter/fetch-engine.py /tmp/ppp-ad5x-engine
+AD5X_ENGINE_DIR=/tmp/ppp-ad5x-engine \
+  python3 -m unittest discover -s services/3mf-converter -p 'test_*.py' -v
+```
+
+For your real HueForge **original** (never the old broken `_AD5X`):
+
+```sh
+AD5X_ENGINE_DIR=/tmp/ppp-ad5x-engine \
+HUEFORGE_SAMPLE="$HOME/Downloads/3D Prints/RDR_Front_229x256.3mf" \
+  python3 -m unittest discover -s services/3mf-converter -p 'test_*.py' -v
+```
+
+Validate app types and Prisma without a live database:
+
+```sh
+npm ci
 DATABASE_URL=postgresql://test:test@localhost:5432/test npx prisma validate
 npx prisma generate
-npm run build
+npx tsc --noEmit
 ```
 
-The migration in `prisma/migrations/20261018023000_ad5x_conversion` is
-additive; it creates a new job table and doesn't rewrite existing stories.
+The additive migration lives under
+`prisma/migrations/20261018023000_ad5x_conversion`.
+Never run it against production as the first integration test.
 
-For an integration test, use a test instance of PPP/Postgres and create a new
-3MF print request after enabling the overlay. Confirm that status progresses
-`pending → processing → completed`, then open the resulting 3MF in OrcaSlicer
-via **File → Open Project**. Inspect painting, filament mapping, purge settings,
-prime tower placement and G-code before printing.
+## Container build and staging
 
-## Opt-in Docker deployment
+PPP normally deploys **published images**, not a source checkout. The
+optional overlay `docker-compose.ad5x.yml` adds the conversion worker
+and enables queuing on the app. It does not change anything unless included
+in the active Compose command. It shares the normal `/uploads` mount,
+joins a private network with Postgres and exposes no extra ports.
 
-The **additional** `docker-compose.ad5x.yml` overlay enables the app's enqueue
-flag and starts the worker together. Without this overlay, behavior remains
-unchanged. Don't add the overlay before the engine and database migration are
-ready.
-
-On the Docker host, identify the actual `DATA_ROOT` set in `.env.docker`.
-Put the converter's two reviewed, version-matched upstream files in
-`${DATA_ROOT}/converter/engine/`:
-
-```text
-converter/engine/
-  bambu2ad5x.py
-  ad5x_template.json
-```
-
-Keep these files outside Git and treat updates to the upstream engine as a
-separate reviewed change. The worker never downloads code at runtime.
-
-The worker operates as numeric UID/GID 1001:1001 (same as PPP's Next.js app).
-The migrator prepares `${DATA_ROOT}/uploads` for that UID. Both containers
-share this mount. The worker connects to Postgres only through an internal
-Docker network and exposes no ports. The Python conversion subprocess receives
-a minimal environment without the worker's DATABASE_URL (defense-in-depth).
-
-For a staging instance with `.env.docker` configured for **staging**:
+From a source checkout and a **test-only** `.env.docker` / `DATA_ROOT`:
 
 ```sh
 docker compose --env-file .env.docker \
@@ -92,40 +111,38 @@ docker compose --env-file .env.docker \
 docker compose --env-file .env.docker \
   -f docker-compose.prod.yml -f docker-compose.build.yml \
   -f docker-compose.ad5x.yml up -d --build
-
-docker compose --env-file .env.docker \
-  -f docker-compose.prod.yml -f docker-compose.build.yml \
-  -f docker-compose.ad5x.yml logs --tail=100 ad5x-worker
 ```
 
-This uses the normal PPP Compose project (unlike the standalone test service's
-`-p ppp-3mf`). Never use `--remove-orphans` to fix warnings.
+On a host using published `ppp-app`, `ppp-migrate` and
+`ppp-ad5x-worker` images from the same commit/tag:
 
-## Rollback and operational limitations
+```sh
+docker compose --env-file .env.docker \
+  -f docker-compose.prod.yml -f docker-compose.ad5x.yml up -d
+```
 
-- **Disable new conversion jobs:** stop the worker using the full Compose file
-  stack with `docker compose ... -f docker-compose.ad5x.yml stop ad5x-worker`,
-  then redeploy PPP without the overlay. Existing files and job rows are
-  retained; no original model is modified. Do not remove orphan containers
-  indiscriminately.
-- **Do not roll back the migration:** it is additive and the older app simply
-  ignores the new table. Keep migration/DB compatible with PPP's release wizard.
-- **Admin only:** converted assets are not sent to requesters automatically.
-- **No backfill:** previously uploaded 3MFs get no conversion job.
-- **Cleanup:** withdrawing a ticket removes its original file and its
-  generated conversion directory. A failed in-flight job also removes partial
-  output. A separate periodic orphan-file sweep is not implemented yet.
-- **No retries yet:** invalid/unsupported files show `failed`; recovery of
-  interrupted jobs uses a 15-minute staleness threshold.
-- **Engine prerequisites:** a missing upstream engine or its default template
-  causes visible conversion failure; ordinary uploads still succeed.
-- **Secrets:** don't commit `.env.docker`, per-printer auth material, or
-  production model files.
+**Use published images containing this feature**, not older PPP images
+that don't have the queue model or migration. The release workflow
+publishes the worker only after the feature is merged to `main`.
+For staging, set `PPP_REGISTRY` and `PPP_TAG` appropriately.
 
-## Known deployment follow-up
+Check `docker compose ... logs --tail=100 ad5x-worker` and upload a test
+3MF. Confirm `pending → processing → completed`, download the generated
+project from the admin ticket, then open it with **File → Open Project** in
+OrcaSlicer. Inspect all colors, print settings, purge behavior, prime tower,
+filament assignments and G-code before any real print.
 
-The worker image currently builds from the repository's `Dockerfile`. For a
-remote Docker host running PPP from only prebuilt images (without a Git
-checkout), the worker will also need a published image and corresponding CI /
-deployment-wizard integration. **Do not point the production wizard at this
-overlay until that packaging has been tested.**
+## Limitations and rollback
+
+- Converted assets are admin-only; requesters only receive the original.
+- More than four filament colors cannot all be loaded simultaneously
+  into the AD5X IFS; plan a physical swap or separate plates.
+- Engine subprocess timeouts and ZIP/archive limits may reject large
+  but otherwise valid projects; failed conversions do not block uploads.
+- Failed jobs are recorded, not silently discarded; there is no manual
+  retry UI or orphan-reconciliation process.
+- To disable conversion, stop `ad5x-worker` and redeploy the app without
+  the overlay. **Do not remove Docker volumes or the new database table**
+  as part of a rollback. The original uploaded 3MFs remain untouched.
+- Never deploy this feature in the middle of a live print or while
+  intoxicated. Test in staging first.
