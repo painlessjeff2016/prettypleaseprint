@@ -83,7 +83,17 @@ async function runJob(job: { id: string; storyId: number }) {
 
   await execFileAsync("python3", [
     "/app/convert.py", source, destination, "--engine", engine, "--timeout", "180",
-  ], { timeout: 210000, maxBuffer: 1024 * 1024 });
+  ], {
+    timeout: 210000,
+    maxBuffer: 1024 * 1024,
+    // Do not pass the Prisma worker's DATABASE_URL or any application secrets
+    // to the third-party Python conversion engine.
+    env: {
+      PATH: process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin",
+      TMPDIR: "/tmp",
+      PYTHONDONTWRITEBYTECODE: "1",
+    },
+  });
 
   const convertedKey = `${relative}/converted.3mf`;
   const reportKey = `${relative}/conversion.report.txt`;
