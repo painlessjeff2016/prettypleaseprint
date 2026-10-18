@@ -1,14 +1,12 @@
-# Optional production / staging overlay. Use alongside prod.yml and build.yml.
+# Optional production / staging overlay. Use alongside prod.yml for published images; add build.yml only for source builds.
 # This worker has no published ports. Do not use with -p ppp-3mf: this is
 # part of the same Compose project as PPP's app and database.
 #
-# Example:
+# Staging example with prebuilt images:
 # docker compose --env-file .env.docker \
-#   -f docker-compose.prod.yml -f docker-compose.build.yml \
-#   -f docker-compose.ad5x.yml up -d --build
+#   -f docker-compose.prod.yml -f docker-compose.ad5x.yml up -d
 #
-# The worker requires both bambu2ad5x.py and ad5x_template.json under
-# ${DATA_ROOT:-./data}/converter/engine, reviewed from upstream.
+# Worker image bundles a pinned, reviewed 3MF-to-AD5X engine at build time.
 services:
   db:
     # PPP's app still uses default networking; the converter may only reach
@@ -22,11 +20,7 @@ services:
       AD5X_AUTOCONVERT: "true"
 
   ad5x-worker:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      target: ad5x-worker
-    image: ppp-ad5x-worker:local
+    image: ${PPP_REGISTRY:-ghcr.io/danileau}/ppp-ad5x-worker:${PPP_TAG:-latest}
     container_name: ppp-ad5x-worker
     restart: unless-stopped
     user: "1001:1001"
@@ -46,7 +40,6 @@ services:
       MODELS_ROOT: /uploads
     volumes:
       - ${DATA_ROOT:-./data}/uploads:/uploads
-      - ${DATA_ROOT:-./data}/converter/engine:/engine:ro
     depends_on:
       db:
         condition: service_healthy
