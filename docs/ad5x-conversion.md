@@ -144,5 +144,4 @@ filament assignments and G-code before any real print.
 - To disable conversion, stop `ad5x-worker` and redeploy the app without
   the overlay. **Do not remove Docker volumes or the new database table**
   as part of a rollback. The original uploaded 3MFs remain untouched.
-- Never deploy this feature in the middle of a live print or while
-  intoxicated. Test in staging first.
+- Test on a staging instance before any production rollout.
