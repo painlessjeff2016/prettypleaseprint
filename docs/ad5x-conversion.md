@@ -93,6 +93,91 @@ The additive migration lives under
 `prisma/migrations/20261018023000_ad5x_conversion`.
 Never run it against production as the first integration test.
 
+## Safely testing in an isolated local stack
+
+Do not run staging commands from the live production checkout or with its
+`.env.docker`. Clone the *feature branch* into a separate directory instead:
+
+```sh
+git clone --branch feature/ad5x-hueforge-integration --single-branch \
+  https://github.com/painlessjeff2016/prettypleaseprint.git \
+  "$HOME/src/ppp-ad5x-staging"
+cd "$HOME/src/ppp-ad5x-staging"
+cp .env.docker.example .env.docker
+```
+
+Change only this new test directory's `.env.docker` (not your live config).
+Use non-production credentials and distinct service data. At minimum:
+
+```dotenv
+APP_URL="http://localhost:4111"
+APP_PORT=4111
+MAILPIT_UI_PORT=8115
+ADMIN_EMAIL="staging@example.com"
+ADMIN_NAME="Staging Admin"
+DATA_ROOT="./data-ad5x-staging"
+BETTER_AUTH_SECRET="REPLACE-WITH-NEW-SECRET"
+DB_PASSWORD="REPLACE-WITH-NEW-DB-PASSWORD"
+CLOUDFLARE_TUNNEL_TOKEN=""
+```
+
+The above is **an excerpt**, not a full replacement for the example
+configuration. Generate both replacement secrets with
+`openssl rand -hex 32`; keep the rest of the example file intact.
+Do not copy production authentication secrets, DB files or uploads.
+
+**Before starting anything**, validate the resolved configuration:
+
+```sh
+docker compose -p ppp-ad5x-staging --env-file .env.docker \
+  -f docker-compose.prod.yml -f docker-compose.build.yml \
+  -f docker-compose.ad5x.yml -f docker-compose.ad5x.staging.yml \
+  --profile mailcatcher config --quiet
+```
+
+Start this isolated staging environment:
+
+```sh
+docker compose -p ppp-ad5x-staging --env-file .env.docker \
+  -f docker-compose.prod.yml -f docker-compose.build.yml \
+  -f docker-compose.ad5x.yml -f docker-compose.ad5x.staging.yml \
+  --profile mailcatcher up -d --build
+```
+
+The staging overlay overrides the fixed container names that otherwise
+conflict with a live PPP instance. Its app binds only
+`127.0.0.1:4111`, its database has no published port, and its optional
+Mailpit UI binds only `127.0.0.1:8115`. The Cloudflare service is
+inactive unless its disabled-by-default staging profile is explicitly
+enabled. **Never enable that profile with a live tunnel token.**
+
+Read the *staging migrator* log for the one-time admin setup link:
+
+```sh
+docker compose -p ppp-ad5x-staging --env-file .env.docker \
+  -f docker-compose.prod.yml -f docker-compose.build.yml \
+  -f docker-compose.ad5x.yml -f docker-compose.ad5x.staging.yml \
+  --profile mailcatcher logs --tail=100 migrate
+```
+
+Open `http://localhost:4111`, set the staging admin password, and upload
+the original five-color HueForge 3MF. The PPP story page should offer
+the original download plus an admin-only converted 3MF and report after
+the worker finishes. Open the converted project in OrcaSlicer and verify
+its colors, 0.08 mm layers, 0.16 mm first layer, 100% infill, custom
+layer swaps and ZMOD start/end macros. **Do not print automatically.**
+
+When done, stop only the staging project without deleting files:
+
+```sh
+docker compose -p ppp-ad5x-staging --env-file .env.docker \
+  -f docker-compose.prod.yml -f docker-compose.build.yml \
+  -f docker-compose.ad5x.yml -f docker-compose.ad5x.staging.yml \
+  --profile mailcatcher down
+```
+
+Avoid `down -v` or `--remove-orphans` near live PPP stacks.
+
 ## Container build and staging
 
 PPP normally deploys **published images**, not a source checkout. The
