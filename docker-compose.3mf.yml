@@ -11,7 +11,9 @@ services:
       dockerfile: services/3mf-converter/Dockerfile
     network_mode: none
     read_only: true
-    user: "65534:65534"
+    # Use the host file owner's numeric UID:GID for bind-mounted /work.
+    # Override with CONVERTER_UID/CONVERTER_GID when the host differs.
+    user: "${CONVERTER_UID:-1000}:${CONVERTER_GID:-1000}"
     security_opt:
       - no-new-privileges:true
     cap_drop:
