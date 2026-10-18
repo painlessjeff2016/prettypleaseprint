@@ -208,3 +208,16 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
   CMD node -e "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 
 CMD ["node", "server.js"]
+
+
+# ---------------------------------------------------------------------------
+# Persistent AD5X conversion worker. Built on the migrator's small Prisma
+# toolchain so no Python DB drivers, shell access to Docker, or Next runtime
+# are needed. The converter itself remains a separately mounted upstream copy.
+FROM migrator AS ad5x-worker
+RUN apk add --no-cache python3
+COPY scripts/3mf-worker.ts ./scripts/3mf-worker.ts
+COPY services/3mf-converter/convert.py /app/convert.py
+ENV MODELS_ROOT=/uploads PYTHONDONTWRITEBYTECODE=1 TMPDIR=/tmp
+USER 1001:1001
+CMD ["./node_modules/.bin/tsx", "scripts/3mf-worker.ts"]
