@@ -22,3 +22,9 @@ services:
       context: .
       target: migrator
     image: ${PPP_REGISTRY:-ghcr.io/danileau}/ppp-migrate:${PPP_TAG:-latest}
+
+  ad5x-worker:
+    build:
+      context: .
+      target: ad5x-worker
+    image: ${PPP_REGISTRY:-ghcr.io/danileau}/ppp-ad5x-worker:${PPP_TAG:-latest}
