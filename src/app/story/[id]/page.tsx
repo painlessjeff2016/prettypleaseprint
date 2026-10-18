@@ -5,6 +5,7 @@ import { getStoryOr404, printerName, requireUser, storyRef, FLOW } from "@/lib/a
 import { PRIORITY_CHIP, STORY_PRIORITIES, quantityText, relativeTime } from "@/lib/catalog";
 import { changeStoryPriority } from "@/app/actions/stories";
 import { formatBytes } from "@/lib/models";
+import { db } from "@/lib/db";
 import { trustedSourceLink } from "@/lib/import-source";
 import { AppHeader } from "@/components/app-header";
 import { Fact, Notice, StatusChip } from "@/components/ui";
@@ -43,6 +44,10 @@ export default async function StoryPage({
   // a 403 would confirm it exists.
   const story = await getStoryOr404(storyId, user);
   const owner = await printerName();
+  // Generated artifacts are visible only to the printer owner.
+  const conversion = user.role === "admin"
+    ? await db.modelConversion.findUnique({ where: { storyId: story.id } })
+    : null;
 
   const currentIndex = (FLOW as readonly string[]).indexOf(story.status);
   // Null for an upload — and for anything in the column that is not a link
@@ -113,6 +118,34 @@ export default async function StoryPage({
                 above the slicer control so the simple answer is the visible
                 one. */}
             <DownloadModel storyId={story.id} filename={story.filename} />
+
+            {user.role === "admin" && story.filename.toLowerCase().endsWith(".3mf") && (
+              <section className="mt-[13.2px] rounded-card border-2 border-ink bg-porcelain p-[13.2px]">
+                <h2 className="m-0 font-display text-[17px] text-ink">AD5X conversion</h2>
+                <p className="mt-[6px] font-mono text-[12px] text-ink-2">
+                  {conversion
+                    ? conversion.status === "pending"
+                      ? "Queued — waiting for the conversion worker."
+                      : conversion.status === "processing"
+                        ? "Converting — refresh the ticket to see results."
+                        : conversion.status === "completed"
+                          ? "Converted with the bundled AD5X defaults."
+                          : "Conversion failed. The original 3MF is still available."
+                    : "No conversion job (older ticket or conversion disabled)."}
+                </p>
+                {conversion?.status === "completed" && (
+                  <div className="mt-[8px] flex flex-wrap gap-[13.2px]">
+                    <a className="font-mono text-[13px] font-bold text-cherry-dk underline" href={`/api/conversions/${story.id}/model`}>Download AD5X 3MF</a>
+                    <a className="font-mono text-[13px] font-bold text-cherry-dk underline" href={`/api/conversions/${story.id}/report`}>Conversion report</a>
+                  </div>
+                )}
+                {conversion?.status === "failed" && conversion.errorMessage && (
+                  <p className="mt-[8px] break-words font-mono text-[12px] text-ink-2">
+                    {conversion.errorMessage}
+                  </p>
+                )}
+              </section>
+            )}
 
             <OpenInSlicer storyId={story.id} userId={user.id} />
 
