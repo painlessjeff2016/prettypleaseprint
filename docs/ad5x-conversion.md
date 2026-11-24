@@ -15,7 +15,7 @@ migration has been performed by this work.
 The worker image bundles the exact **reviewed commit** of
 [painlessjeff2016/3MF-to-AD5X](https://github.com/painlessjeff2016/3MF-to-AD5X):
 
-`153f8a80040a24a585b9986d27f6c0a8341f02a4`
+`4c2ba9317b5501ace35eb87a229e2165dfc65fe5`
 
 This commit contains the HueForge fix that understands per-layer
 `tool_change` commands without pruning referenced filament slots. It also
@@ -237,3 +237,5 @@ filament assignments and G-code before any real print.
   the overlay. **Do not remove Docker volumes or the new database table**
   as part of a rollback. The original uploaded 3MFs remain untouched.
 - Test on a staging instance before any production rollout.
+
+The personal KilnOS template selects `0.20mm Standard @FF AD5X - default`, preserves machine overrides and preset inheritance, selects Moonraker with G-code uploads, and embeds the Kiln IFS Tool Map selection and trusted desktop postprocessor path. Install the matching printer/process presets and plugin on the OrcaSlicer desktop. PPP embeds the postprocessor path; it does not execute the slicer postprocessor on the server. Startup uses firmware purge mode 1 before selecting mode 0 or 2 for printing.
