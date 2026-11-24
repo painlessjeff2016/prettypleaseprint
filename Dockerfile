@@ -213,7 +213,7 @@ CMD ["node", "server.js"]
 # ---------------------------------------------------------------------------
 # Persistent AD5X conversion worker. Bundles the exact verified fork
 # revision, including HueForge layer-switch preservation and the owner's
-# Flashforge AD5X/ZMOD machine template. No network access is needed at run
+# Flashforge AD5X/KilnOS Adaptive Purge machine template. No network access is needed at run
 # time and the engine cannot drift when a Git branch moves.
 FROM migrator AS ad5x-worker
 RUN apk add --no-cache python3 ca-certificates
