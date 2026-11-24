@@ -15,14 +15,17 @@ migration has been performed by this work.
 The worker image bundles the exact **reviewed commit** of
 [painlessjeff2016/3MF-to-AD5X](https://github.com/painlessjeff2016/3MF-to-AD5X):
 
-`fc4042038059d501540ee16f2d03991e4c5a92b3`
+`153f8a80040a24a585b9986d27f6c0a8341f02a4`
 
 This commit contains the HueForge fix that understands per-layer
 `tool_change` commands without pruning referenced filament slots. It also
-contains the owner's complete AD5X/ZMOD template:
-`LED_ON` + `START_PRINT` at print start,
-`END_PRINT` + `LED_OFF` at print end, and
-`SET_PRINT_STATS_INFO` before each layer.
+contains the owner's tested AD5X KilnOS Adaptive Purge template:
+`LED_ON` + `PRINT_START` at print start,
+`PRINT_END` + `LED_OFF` at print end, and
+`SET_PRINT_STATS_INFO` after each layer change. The Moonraker printer agent
+is selected, with slicer-controlled chute purging by default and optional
+prime-tower purging. The KilnOS compatibility macros must be available;
+review the converted project in OrcaSlicer before printing.
 
 `services/3mf-converter/fetch-engine.py` checks SHA-256 of the script,
 template and MIT license **during image build**. No internet download,
