@@ -16,10 +16,10 @@ import sys
 from urllib.request import urlopen
 
 SOURCE_REPO = "painlessjeff2016/3MF-to-AD5X"
-REVISION = "fc4042038059d501540ee16f2d03991e4c5a92b3"
+REVISION = "153f8a80040a24a585b9986d27f6c0a8341f02a4"
 SHA256 = {
-    "bambu2ad5x.py": "6fe17a6db150e7eb1839fc6673226ce7e46b08fafd5fbd835989c1a2a4012fd9",
-    "ad5x_template.json": "ad278ec624e9fd63949c9b45cef95448edba7412198e0af6244af3fc95cbb4b9",
+    "bambu2ad5x.py": "ec16a434e576bd41c2e1d4f61f8342cbe9d68829a71b39d09b39679df84645f8",
+    "ad5x_template.json": "850175cdf2ade9375b6a9ab9550f11f11cc7e149a6f75702cc70c47ea79b00f1",
     "LICENSE": "9792c3346386090c9912c1650951afadf098ec031ab59b1b65b79a29439a03e4",
 }
 
